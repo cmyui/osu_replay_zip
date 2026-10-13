@@ -35,22 +35,10 @@ namespace orz {
 		if (block.raw_size > ORZ_MAX_STREAM)
 			return false;
 
-		u8 props[LZMA_PROPS_SIZE]{ block.props };
+		std::array<u8, 5> props{ block.props };
+		memcpy(props.data() + 1, &block.raw_size, 4);
 
-		memcpy(props + 1, &block.raw_size, 4);
-
-		out.resize(block.raw_size);
-
-		SizeT out_size{ block.raw_size }, input_size{ size };
-		ELzmaStatus lzma_status{};
-
-		if (LzmaDecode(out.data(), &out_size, data, &input_size, props,
-			LZMA_PROPS_SIZE, LZMA_FINISH_END, &lzma_status, &lzma_allocFuncs) != SZ_OK)
-			return false;
-
-		out.resize(out_size);
-
-		return true;
+		return lzma::decode({ data, size }, props, out, block.raw_size);
 	}
 
 }

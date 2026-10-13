@@ -94,7 +94,7 @@
     <ClCompile>
       <WarningLevel>Level3</WarningLevel>
       <SDLCheck>true</SDLCheck>
-      <PreprocessorDefinitions>WIN32;_DEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>NOMINMAX;_CRT_SECURE_NO_WARNINGS;WIN32;_DEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp20</LanguageStandard>
     </ClCompile>
@@ -109,7 +109,7 @@
       <FunctionLevelLinking>true</FunctionLevelLinking>
       <IntrinsicFunctions>true</IntrinsicFunctions>
       <SDLCheck>true</SDLCheck>
-      <PreprocessorDefinitions>WIN32;NDEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>NOMINMAX;_CRT_SECURE_NO_WARNINGS;WIN32;NDEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp20</LanguageStandard>
       <EnableEnhancedInstructionSet>StreamingSIMDExtensions2</EnableEnhancedInstructionSet>
@@ -125,7 +125,7 @@
     <ClCompile>
       <WarningLevel>Level3</WarningLevel>
       <SDLCheck>true</SDLCheck>
-      <PreprocessorDefinitions>_DEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>NOMINMAX;_CRT_SECURE_NO_WARNINGS;_DEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp20</LanguageStandard>
     </ClCompile>
@@ -140,7 +140,7 @@
       <FunctionLevelLinking>true</FunctionLevelLinking>
       <IntrinsicFunctions>true</IntrinsicFunctions>
       <SDLCheck>true</SDLCheck>
-      <PreprocessorDefinitions>NDEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>NOMINMAX;_CRT_SECURE_NO_WARNINGS;NDEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp20</LanguageStandard>
     </ClCompile>
@@ -152,62 +152,58 @@
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
-    <ClCompile Include="Lib\7zAlloc.c" />
-    <ClCompile Include="Lib\7zArcIn.c" />
-    <ClCompile Include="Lib\7zBuf.c" />
-    <ClCompile Include="Lib\7zBuf2.c" />
-    <ClCompile Include="Lib\7zCrc.c" />
-    <ClCompile Include="Lib\7zCrcOpt.c" />
-    <ClCompile Include="Lib\7zDec.c" />
-    <ClCompile Include="Lib\7zStream.c" />
-    <ClCompile Include="Lib\Alloc.c" />
-    <ClCompile Include="Lib\Bcj2.c" />
-    <ClCompile Include="Lib\Bcj2Enc.c" />
-    <ClCompile Include="Lib\Bra.c" />
-    <ClCompile Include="Lib\Bra86.c" />
-    <ClCompile Include="Lib\BraIA64.c" />
-    <ClCompile Include="Lib\CpuArch.c" />
-    <ClCompile Include="Lib\Delta.c" />
-    <ClCompile Include="Lib\DllSecur.c" />
-    <ClCompile Include="Lib\LzFind.c" />
-    <ClCompile Include="Lib\LzFindMt.c" />
-    <ClCompile Include="Lib\Lzma86Dec.c" />
-    <ClCompile Include="Lib\Lzma86Enc.c" />
-    <ClCompile Include="Lib\LzmaDec.c" />
-    <ClCompile Include="Lib\LzmaEnc.c" />
-    <ClCompile Include="Lib\LzmaLib.c" />
-    <ClCompile Include="Lib\Sort.c" />
-    <ClCompile Include="Lib\Threads.c" />
+    <ClCompile Include="Lib\C\7zCrc.c" />
+    <ClCompile Include="Lib\C\Alloc.c" />
+    <ClCompile Include="Lib\C\Compress\Lz\MatchFinder.c" />
+    <ClCompile Include="Lib\CPP\7zip\Common\InBuffer.cpp" />
+    <ClCompile Include="Lib\CPP\7zip\Common\OutBuffer.cpp" />
+    <ClCompile Include="Lib\CPP\7zip\Common\StreamUtils.cpp" />
+    <ClCompile Include="Lib\CPP\7zip\Compress\LZ\LZOutWindow.cpp" />
+    <ClCompile Include="Lib\CPP\7zip\Compress\LZMA\LZMADecoder.cpp" />
+    <ClCompile Include="Lib\CPP\7zip\Compress\LZMA\LZMAEncoder.cpp" />
+    <ClCompile Include="Lib\CPP\7zip\Compress\RangeCoder\RangeCoderBit.cpp" />
+    <ClCompile Include="lzma.cpp" />
+    <ClCompile Include="lzma_guids.cpp" />
     <ClCompile Include="Source.cpp" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="Lib\CPP\7zip\Common\InBuffer.h" />
+    <ClInclude Include="Lib\CPP\7zip\Common\OutBuffer.h" />
+    <ClInclude Include="Lib\CPP\7zip\Common\StdAfx.h" />
+    <ClInclude Include="Lib\CPP\7zip\Common\StreamUtils.h" />
+    <ClInclude Include="Lib\CPP\7zip\Compress\LZMA\LZMA.h" />
+    <ClInclude Include="Lib\CPP\7zip\Compress\LZMA\LZMADecoder.h" />
+    <ClInclude Include="Lib\CPP\7zip\Compress\LZMA\LZMAEncoder.h" />
+    <ClInclude Include="Lib\CPP\7zip\Compress\LZMA\StdAfx.h" />
+    <ClInclude Include="Lib\CPP\7zip\Compress\LZ\LZOutWindow.h" />
+    <ClInclude Include="Lib\CPP\7zip\Compress\LZ\StdAfx.h" />
+    <ClInclude Include="Lib\CPP\7zip\Compress\RangeCoder\RangeCoder.h" />
+    <ClInclude Include="Lib\CPP\7zip\Compress\RangeCoder\RangeCoderBit.h" />
+    <ClInclude Include="Lib\CPP\7zip\Compress\RangeCoder\RangeCoderBitTree.h" />
+    <ClInclude Include="Lib\CPP\7zip\Compress\RangeCoder\RangeCoderOpt.h" />
+    <ClInclude Include="Lib\CPP\7zip\Compress\RangeCoder\StdAfx.h" />
+    <ClInclude Include="Lib\CPP\7zip\ICoder.h" />
+    <ClInclude Include="Lib\CPP\7zip\IDecl.h" />
+    <ClInclude Include="Lib\CPP\7zip\IStream.h" />
+    <ClInclude Include="Lib\CPP\Common\Defs.h" />
+    <ClInclude Include="Lib\CPP\Common\MyCom.h" />
+    <ClInclude Include="Lib\CPP\Common\MyException.h" />
+    <ClInclude Include="Lib\CPP\Common\MyGuidDef.h" />
+    <ClInclude Include="Lib\CPP\Common\MyInitGuid.h" />
+    <ClInclude Include="Lib\CPP\Common\MyUnknown.h" />
+    <ClInclude Include="Lib\CPP\Common\MyWindows.h" />
+    <ClInclude Include="Lib\CPP\Common\NewHandler.h" />
+    <ClInclude Include="Lib\CPP\Common\Types.h" />
+    <ClInclude Include="Lib\C\7zCrc.h" />
+    <ClInclude Include="Lib\C\Alloc.h" />
+    <ClInclude Include="Lib\C\Compress\Lz\LzHash.h" />
+    <ClInclude Include="Lib\C\Compress\Lz\MatchFinder.h" />
+    <ClInclude Include="Lib\C\IStream.h" />
+    <ClInclude Include="Lib\C\Types.h" />
+    <ClInclude Include="lzma.h" />
     <ClInclude Include="device_prior.h" />
     <ClInclude Include="device_space.h" />
     <ClInclude Include="fruits_prior.h" />
-    <ClInclude Include="Lib\7z.h" />
-    <ClInclude Include="Lib\7zAlloc.h" />
-    <ClInclude Include="Lib\7zBuf.h" />
-    <ClInclude Include="Lib\7zCrc.h" />
-    <ClInclude Include="Lib\7zTypes.h" />
-    <ClInclude Include="Lib\7zVersion.h" />
-    <ClInclude Include="Lib\Alloc.h" />
-    <ClInclude Include="Lib\Bcj2.h" />
-    <ClInclude Include="Lib\Bra.h" />
-    <ClInclude Include="Lib\Compiler.h" />
-    <ClInclude Include="Lib\CpuArch.h" />
-    <ClInclude Include="Lib\Delta.h" />
-    <ClInclude Include="Lib\DllSecur.h" />
-    <ClInclude Include="Lib\LzFind.h" />
-    <ClInclude Include="Lib\LzFindMt.h" />
-    <ClInclude Include="Lib\LzHash.h" />
-    <ClInclude Include="Lib\Lzma86.h" />
-    <ClInclude Include="Lib\LzmaDec.h" />
-    <ClInclude Include="Lib\LzmaEnc.h" />
-    <ClInclude Include="Lib\LzmaLib.h" />
-    <ClInclude Include="Lib\Precomp.h" />
-    <ClInclude Include="Lib\RotateDefs.h" />
-    <ClInclude Include="Lib\Sort.h" />
-    <ClInclude Include="Lib\Threads.h" />
     <ClInclude Include="life_prior.h" />
     <ClInclude Include="orz_decimal.h" />
     <ClInclude Include="orz_device_std.h" />
