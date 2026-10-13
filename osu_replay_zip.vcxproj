@@ -22,33 +22,33 @@
     <VCProjectVersion>16.0</VCProjectVersion>
     <Keyword>Win32Proj</Keyword>
     <ProjectGuid>{8914feda-9bed-41d0-aae9-f91718fb9315}</ProjectGuid>
-    <RootNamespace>osureplaycompress</RootNamespace>
+    <RootNamespace>osureplayzip</RootNamespace>
     <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'" Label="Configuration">
     <ConfigurationType>Application</ConfigurationType>
     <UseDebugLibraries>true</UseDebugLibraries>
-    <PlatformToolset>v142</PlatformToolset>
+    <PlatformToolset>v145</PlatformToolset>
     <CharacterSet>MultiByte</CharacterSet>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'" Label="Configuration">
     <ConfigurationType>Application</ConfigurationType>
     <UseDebugLibraries>false</UseDebugLibraries>
-    <PlatformToolset>v142</PlatformToolset>
+    <PlatformToolset>v145</PlatformToolset>
     <WholeProgramOptimization>true</WholeProgramOptimization>
     <CharacterSet>MultiByte</CharacterSet>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'" Label="Configuration">
     <ConfigurationType>Application</ConfigurationType>
     <UseDebugLibraries>true</UseDebugLibraries>
-    <PlatformToolset>v142</PlatformToolset>
+    <PlatformToolset>v145</PlatformToolset>
     <CharacterSet>Unicode</CharacterSet>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'" Label="Configuration">
     <ConfigurationType>Application</ConfigurationType>
     <UseDebugLibraries>false</UseDebugLibraries>
-    <PlatformToolset>v142</PlatformToolset>
+    <PlatformToolset>v145</PlatformToolset>
     <WholeProgramOptimization>true</WholeProgramOptimization>
     <CharacterSet>Unicode</CharacterSet>
   </PropertyGroup>
@@ -72,19 +72,23 @@
   <PropertyGroup Label="UserMacros" />
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
     <LinkIncremental>true</LinkIncremental>
-    <IncludePath>C:\Users\Akita\Source\Repos\osu_replay_compress\Lib;C:\Users\Akita\Source\Repos\osu_replay_compress\google\include;$(IncludePath)</IncludePath>
-    <TargetName>rrf</TargetName>
+    <IncludePath>$(ProjectDir)Lib;$(IncludePath)</IncludePath>
+    <TargetName>orz</TargetName>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
     <LinkIncremental>false</LinkIncremental>
-    <IncludePath>C:\Users\Akita\Source\Repos\osu_replay_compress\Lib;C:\Users\Akita\Source\Repos\osu_replay_compress\google\include;$(IncludePath)</IncludePath>
-    <TargetName>rrf</TargetName>
+    <IncludePath>$(ProjectDir)Lib;$(IncludePath)</IncludePath>
+    <TargetName>orz</TargetName>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <LinkIncremental>true</LinkIncremental>
+    <IncludePath>$(ProjectDir)Lib;$(IncludePath)</IncludePath>
+    <TargetName>orz</TargetName>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <LinkIncremental>false</LinkIncremental>
+    <IncludePath>$(ProjectDir)Lib;$(IncludePath)</IncludePath>
+    <TargetName>orz</TargetName>
   </PropertyGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
     <ClCompile>
@@ -123,6 +127,7 @@
       <SDLCheck>true</SDLCheck>
       <PreprocessorDefinitions>_DEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
+      <LanguageStandard>stdcpp20</LanguageStandard>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
@@ -137,6 +142,7 @@
       <SDLCheck>true</SDLCheck>
       <PreprocessorDefinitions>NDEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
+      <LanguageStandard>stdcpp20</LanguageStandard>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
@@ -175,6 +181,9 @@
     <ClCompile Include="Source.cpp" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="device_prior.h" />
+    <ClInclude Include="device_space.h" />
+    <ClInclude Include="fruits_prior.h" />
     <ClInclude Include="Lib\7z.h" />
     <ClInclude Include="Lib\7zAlloc.h" />
     <ClInclude Include="Lib\7zBuf.h" />
@@ -199,9 +208,23 @@
     <ClInclude Include="Lib\RotateDefs.h" />
     <ClInclude Include="Lib\Sort.h" />
     <ClInclude Include="Lib\Threads.h" />
-    <ClInclude Include="rrf_read.h" />
-    <ClInclude Include="rrf_shared.h" />
-    <ClInclude Include="rrf_write.h" />
+    <ClInclude Include="life_prior.h" />
+    <ClInclude Include="orz_decimal.h" />
+    <ClInclude Include="orz_device_std.h" />
+    <ClInclude Include="orz_dotnet.h" />
+    <ClInclude Include="orz_encoder_fruits.h" />
+    <ClInclude Include="orz_encoder_mania.h" />
+    <ClInclude Include="orz_encoder_std.h" />
+    <ClInclude Include="orz_encoder_taiko.h" />
+    <ClInclude Include="orz_life.h" />
+    <ClInclude Include="orz_read.h" />
+    <ClInclude Include="orz_shared.h" />
+    <ClInclude Include="orz_state.h" />
+    <ClInclude Include="orz_text.h" />
+    <ClInclude Include="orz_time.h" />
+    <ClInclude Include="orz_write.h" />
+    <ClInclude Include="rc.h" />
+    <ClInclude Include="time_prior.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

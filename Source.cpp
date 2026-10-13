@@ -1,127 +1,116 @@
+#define _CRT_SECURE_NO_WARNINGS
 
-#include "rrf_write.h"
-#include "rrf_read.h"
+#include "orz_shared.h"
+
+#include "orz_write.h"
+#include "orz_read.h"
 
 #include <filesystem>
 
-void run_test_set() {
-
-	enum {
-		group_std_game,
-		group_std_screen,
-		group_taiko,
-		group_mania,
-		group_fruits
-	};
-
-	struct _entry {
-
-		std::string name;
-
-		u32 new_size, old_size;
-
-	};
-
-	std::vector<_entry> ENTRY[5];
-
-	for (const auto& file_entry : std::filesystem::directory_iterator("test/")) {
-
-		const auto _p{ file_entry.path().native() };
-
-		const auto file_name{ std::string(_p.begin(), _p.end()) };
-
-		DIAG::OUTPUT_SIZE = 0; DIAG::INPUT_SIZE = 0;
-
-		u32 flags{};
-
-		flags |= (RRF_FLAG::gamemode_fruits) * (file_name.find("fruit") != std::string::npos);
-		flags |= (RRF_FLAG::gamemode_mania) * (file_name.find("mania") != std::string::npos);
-		flags |= (RRF_FLAG::gamemode_taiko) * (file_name.find("taiko") != std::string::npos);
-
-		if (flags == 0 && file_name.find("osu") == std::string::npos)
-			continue;
-
-		std::string output_file{ file_name.substr(5)};
-		DIAG::using_screen = 0;
-		osr_to_rrf(file_name.c_str(), "", flags);
-
-		if (DIAG::OUTPUT_SIZE == 0 || DIAG::INPUT_SIZE == 0) {
-			continue;
-		}
-
-		auto index{ group_std_game };
-
-		if (flags & RRF_FLAG::gamemode_mania)
-			index = group_mania;
-
-		if (flags & RRF_FLAG::gamemode_taiko)
-			index = group_taiko;
-
-		if (flags & RRF_FLAG::gamemode_fruits)
-			index = group_fruits;
-
-		if (DIAG::using_screen)
-			index = group_std_screen;
-
-		auto& e = ENTRY[index].emplace_back();
-
-		e.old_size = DIAG::INPUT_SIZE;
-		e.new_size = DIAG::OUTPUT_SIZE;
-
-	}
-
-	const std::string OUTFILE[5]{
-		"res/osu-game.txt",
-		"res/osu-screen.txt",
-		"res/taiko.txt",
-		"res/mania.txt",
-		"res/fruits.txt",
-	};
-
-	for (size_t i{}; i < 5; ++i) {
-
-		std::string o{};
-		const auto& e = ENTRY[i];
-
-		u32 T_OLD{}, T_NEW{};
-
-		for (const auto& v : e) {
-			T_OLD += v.old_size;
-			T_NEW += v.new_size;
-			o += std::to_string(float(v.new_size) / float(v.old_size)) + std::string(" ") + std::to_string(v.old_size) + " ";
-		}
-		
-		write_file(OUTFILE[i].c_str(), o);
-		printf("%i > %i\n", T_OLD, T_NEW);
-
-	}
-
+static bool is_orz(const std::vector<u8>& data) {
+	return data.size() >= 2 && data[0] == ORZ_MAGIC;
 }
 
+static int run(const int param_count, char** param) {
+
+	const auto usage = []() {
+
+		fprintf(stderr, "usage: orz.exe input.osr|input.orz [-o output]\n");
+
+		return 1;
+	};
+
+	std::filesystem::path in, out;
+
+	for (int i{ 1 }; i < param_count; ++i) {
+
+		const std::string_view a{ param[i] };
+
+		if (a == "-o") {
+
+			if (i + 1 >= param_count || !out.empty())
+				return usage();
+
+			out = param[++i];
+
+		} else if (in.empty())
+			in = param[i];
+		else
+			return usage();
+
+	}
+
+	if (in.empty())
+		return usage();
+
+	const std::string in_s{ in.string() };
+	const auto data{ read_file(in_s.c_str()) };
+
+	if (data.empty()) {
+
+		fprintf(stderr, "error: can not read %s\n", in_s.c_str());
+
+		return 1;
+	}
+
+	const bool decode{ is_orz(data) };
+
+	if (out.empty())
+		out = std::filesystem::path{ in }.replace_extension(decode ? ".osr" : ".orz");
+
+	if (std::filesystem::exists(out) && std::filesystem::equivalent(in, out)) {
+
+		fprintf(stderr, "error: the output would overwrite %s, use -o\n", in_s.c_str());
+
+		return 1;
+	}
+
+	const std::string out_s{ out.string() };
+
+	if (decode) {
+
+		if (!orz_to_osr(in_s.c_str(), out_s.c_str())) {
+
+			if (read_container(data).newer)
+				fprintf(stderr, "error: %s was made by a newer version of orz\n", in_s.c_str());
+			else if (_decoded_orz d; orz_decode_frames(data, d, DECODE_SKIP_CRC))
+				fprintf(stderr, "error: %s fails its CRC check (damaged, or written by an incompatible orz build)\n", in_s.c_str());
+			else
+				fprintf(stderr, "error: %s is not a valid .orz file\n", in_s.c_str());
+
+			return 1;
+		}
+
+	} else {
+
+		orz_state st{};
+
+		osr_to_orz(in_s.c_str(), out_s.c_str(), ORZ_FLAG::has_osr_header, st);
+
+		if (st.output.empty()) {
+
+			fprintf(stderr, "error: %s is not a valid .osr file\n", in_s.c_str());
+
+			return 1;
+		}
+
+		printf("%s -> %s (reduction %ld%%)\n", in_s.c_str(), out_s.c_str(),
+			std::lround(100.0 - 100.0 * st.output.size() / data.size()));
+
+	}
+
+	return 0;
+}
 
 int main(const int param_count, char** param) {
 
-	//run_test_set(); return 0;
+	try {
+		return run(param_count, param);
+	} catch (const std::exception& e) {
 
-	if (param_count != 3) {
-	
-		puts("rrf.exe {input_path} {output_path}\n");
+		fprintf(stderr, "error: %s\n", e.what());
 
-		return 0;
+		return 1;
 	}
 
-	if(std::string_view(param[1]).find(".osr") != std::string::npos) {
-
-		osr_to_rrf(param[1], param[2], RRF_FLAG::has_osr_header);
-		//printf("\n Final Compression Ratio: %f\n", float(DIAG::OUTPUT_SIZE) / float(DIAG::INPUT_SIZE));
-
-	}
-
-	if(std::string_view(param[1]).find(".rrf") != std::string::npos) {
-
-		rrf_to_osr(param[1], param[2]);
-
-	}
-
-	return 1;
 }

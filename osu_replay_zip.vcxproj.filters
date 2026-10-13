@@ -104,15 +104,6 @@
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="rrf_read.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="rrf_shared.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="rrf_write.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
     <ClInclude Include="Lib\7z.h">
       <Filter>Header Files\zip</Filter>
     </ClInclude>
@@ -184,6 +175,66 @@
     </ClInclude>
     <ClInclude Include="Lib\Threads.h">
       <Filter>Header Files\zip</Filter>
+    </ClInclude>
+    <ClInclude Include="time_prior.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="rc.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="orz_write.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="orz_time.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="orz_text.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="orz_state.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="orz_shared.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="orz_read.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="orz_life.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="orz_encoder_taiko.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="orz_encoder_std.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="orz_encoder_mania.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="orz_encoder_fruits.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="orz_dotnet.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="orz_device_std.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="orz_decimal.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="life_prior.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="fruits_prior.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="device_space.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="device_prior.h">
+      <Filter>Header Files</Filter>
     </ClInclude>
   </ItemGroup>
 </Project>
