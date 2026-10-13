@@ -4,6 +4,7 @@
 #include <array>
 #include <bit>
 #include <charconv>
+#include <cfloat>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
@@ -119,97 +120,7 @@ enum class orz_tag : u8 {
 
 };
 
-#define _7Z_NO_METHOD_LZMA2
-
-#include "LzmaEnc.h"
-#include "LzmaDec.h"
-#include "7zTypes.h"
-
-struct _lzma_block_cache {
-
-	static constexpr size_t SLOTS{ 8 }, MAX_BLOCK{ 1 << 22 }, HEADER{ 16 };
-
-	u8* block[SLOTS]{};
-	size_t size[SLOTS]{};
-
-	~_lzma_block_cache() {
-
-		for (u8* b : block)
-			delete[] b;
-
-	}
-};
-
-static _lzma_block_cache& lzma_cache() {
-
-	thread_local _lzma_block_cache cache;
-
-	return cache;
-}
-
-static void* _lzmaAlloc(ISzAllocPtr, size_t size) {
-
-	auto& c{ lzma_cache() };
-
-	for (size_t k{}; k < c.SLOTS; ++k) {
-
-		if (c.block[k] && c.size[k] >= size && c.size[k] / 2 <= size) {
-
-			u8* b{ c.block[k] };
-
-			c.block[k] = nullptr;
-
-			return b + c.HEADER;
-		}
-
-	}
-
-	u8* b{ new (std::nothrow) u8[size + c.HEADER] };
-
-	if (!b)
-		return nullptr;
-
-	memcpy(b, &size, sizeof size);
-
-	return b + c.HEADER;
-}
-
-static void _lzmaFree(ISzAllocPtr, void* addr) {
-
-	if (!addr)
-		return;
-
-	auto& c{ lzma_cache() };
-
-	u8* b{ reinterpret_cast<u8*>(addr) - c.HEADER };
-
-	size_t size;
-
-	memcpy(&size, b, sizeof size);
-
-	if (size <= c.MAX_BLOCK) {
-
-		for (size_t k{}; k < c.SLOTS; ++k) {
-
-			if (!c.block[k]) {
-
-				c.block[k] = b;
-				c.size[k] = size;
-
-				return;
-			}
-
-		}
-
-	}
-
-	delete[] b;
-
-}
-
-static ISzAlloc lzma_allocFuncs = {
-	_lzmaAlloc, _lzmaFree
-};
+#include "lzma.h"
 
 #ifndef ON_SCOPE_EXIT
 
@@ -726,69 +637,40 @@ inline bool decompress_osr_string(const u8* data, size_t size, std::string& out)
 	if (text_size > ORZ_MAX_STREAM)
 		return false;
 
-	out.resize(text_size);
-
-	SizeT out_size{ text_size }, in_size{ size - (5 + 8) };
-	ELzmaStatus status{};
-
-	LzmaDecode((u8*)out.data(), &out_size, data + 5 + 8, &in_size, data, 5, LZMA_FINISH_END, &status, &lzma_allocFuncs);
-
-	if (out_size != text_size) {
-
-		out.clear();
-
+	std::vector<u8> decoded;
+	if (!lzma::decode({ data + 13, size - 13 }, std::span<const u8, 5>{ data, 5 }, decoded, text_size))
 		return false;
-	}
 
+	out.assign(decoded.begin(), decoded.end());
 	return true;
 }
 
 inline std::vector<u8> compress_osr_string(std::string_view string, bool stable) {
 
-	std::vector<u8> output(std::max<size_t>(1024, size_t(string.size() * 1.5) + 64));
-
-	CLzmaEncProps p;
-
-	LzmaEncProps_Init(&p);
+	lzma::properties p{};
 
 	if (stable) {
 
-		p.level = 5;
 		p.dictSize = 1u << 21;
-		p.lc = 3;
-		p.lp = 0;
-		p.pb = 2;
-		p.algo = 1;
 		p.fb = 255;
-		p.btMode = 1;
-		p.numHashBytes = 4;
-		p.mc = 16 + (255 >> 1);
-		p.writeEndMark = 0;
-		p.numThreads = 1;
 
 	} else {
 
-		p.level = 0;
+		p.algo = 0;
+		p.btMode = false;
+		p.fb = 32;
+		p.mc = 16;
 		p.dictSize = (u32)std::clamp<size_t>(string.size(), 1 << 12, 1 << 24);
 
 	}
 
+	std::array<u8, 5> props;
+	auto compressed{ lzma::encode({ (const u8*)string.data(), string.size() }, p, props) };
+	std::vector<u8> output(13);
+	std::copy(props.begin(), props.end(), output.begin());
 	const u64 size{ string.size() };
-
 	memcpy(output.data() + 5, &size, 8);
-
-	size_t len{ output.size() - (5 + 8) };
-	SizeT props_size{ 5 };
-
-	if (LzmaEncode(output.data() + 5 + 8, &len, (const u8*)string.data(), string.size(),
-		&p, output.data(), &props_size, p.writeEndMark,
-		0,
-		&lzma_allocFuncs, &lzma_allocFuncs
-	) != SZ_OK)
-		throw std::runtime_error("LZMA encode failed");
-
-	output.resize(len + 5 + 8);
-
+	output.insert(output.end(), compressed.begin(), compressed.end());
 	return output;
 }
 

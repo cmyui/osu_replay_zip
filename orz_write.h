@@ -86,53 +86,35 @@ inline bit_stream position_escapes(const _osr& r, const std::vector<u32>& esc, f
 
 namespace comp {
 
-	CLzmaEncProps base_prop(u32 lc, u32 lp) {
+	lzma::properties base_prop(u32 lc, u32 lp) {
 
-		CLzmaEncProps p;
+		lzma::properties p{};
 
-		LzmaEncProps_Init(&p);
-
-		p.level = 5;
 		p.fb = 32;
 		p.mc = 16;
-		p.numHashBytes = 4;
 		p.lc = lc;
 		p.lp = lp;
 		p.pb = 0;
-		p.numThreads = 1;
 
 		return p;
 	}
 
-	CLzmaEncProps pos_delta_prop() {
+	lzma::properties pos_delta_prop() {
 		return base_prop(0, 0);
 	}
 
-	CLzmaEncProps composite_key_prop() {
+	lzma::properties composite_key_prop() {
 		return base_prop(0, 1);
 	}
 
-	bool compress(const bit_stream& b, CLzmaEncProps prop, std::vector<u8>& out, u8& props_byte) {
-
-		out.resize(std::max<size_t>(size_t(b.data.size() * 1.5), 1024));
-
-		size_t len{ out.size() };
+	bool compress(const bit_stream& b, lzma::properties prop, std::vector<u8>& out, u8& props_byte) {
 
 		prop.dictSize = (u32)std::min<size_t>(b.data.size(), 1 << 24);
 
-		u8 props[LZMA_PROPS_SIZE];
-		SizeT propsSize = LZMA_PROPS_SIZE;
-
-		if (LzmaEncode(out.data(), &len, b.data.data(), b.data.size(),
-			&prop, props, &propsSize, 0,
-			0,
-			&lzma_allocFuncs, &lzma_allocFuncs
-		) != SZ_OK)
-			throw std::runtime_error("LZMA encode failed");
-
-		out.resize(len);
-
+		std::array<u8, 5> props;
+		out = lzma::encode(b.data, prop, props);
 		props_byte = props[0];
+		const auto len{ out.size() };
 
 		return len < b.data.size();
 	}
@@ -197,7 +179,7 @@ struct _orz_construct {
 
 	std::vector<u8> file_data;
 
-	void add_compress_stream(orz_tag tag, const bit_stream& data, const CLzmaEncProps& props) {
+	void add_compress_stream(orz_tag tag, const bit_stream& data, const lzma::properties& props) {
 
 		if (data_count == 255 || data.size() == 0) [[unlikely]]
 			return;

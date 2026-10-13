@@ -21,161 +21,47 @@
     </Filter>
   </ItemGroup>
   <ItemGroup>
+    <ClCompile Include="Lib\C\7zCrc.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="Lib\C\Alloc.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="Lib\C\Compress\Lz\MatchFinder.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="Lib\CPP\7zip\Common\InBuffer.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="Lib\CPP\7zip\Common\OutBuffer.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="Lib\CPP\7zip\Common\StreamUtils.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="Lib\CPP\7zip\Compress\LZ\LZOutWindow.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="Lib\CPP\7zip\Compress\LZMA\LZMADecoder.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="Lib\CPP\7zip\Compress\LZMA\LZMAEncoder.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="Lib\CPP\7zip\Compress\RangeCoder\RangeCoderBit.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="lzma.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="lzma_guids.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="Source.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="Lib\7zAlloc.c">
-      <Filter>Source Files\7z</Filter>
-    </ClCompile>
-    <ClCompile Include="Lib\7zArcIn.c">
-      <Filter>Source Files\7z</Filter>
-    </ClCompile>
-    <ClCompile Include="Lib\7zBuf.c">
-      <Filter>Source Files\7z</Filter>
-    </ClCompile>
-    <ClCompile Include="Lib\7zBuf2.c">
-      <Filter>Source Files\7z</Filter>
-    </ClCompile>
-    <ClCompile Include="Lib\7zCrc.c">
-      <Filter>Source Files\7z</Filter>
-    </ClCompile>
-    <ClCompile Include="Lib\7zCrcOpt.c">
-      <Filter>Source Files\7z</Filter>
-    </ClCompile>
-    <ClCompile Include="Lib\7zDec.c">
-      <Filter>Source Files\7z</Filter>
-    </ClCompile>
-    <ClCompile Include="Lib\7zStream.c">
-      <Filter>Source Files\7z</Filter>
-    </ClCompile>
-    <ClCompile Include="Lib\Alloc.c">
-      <Filter>Source Files\7z</Filter>
-    </ClCompile>
-    <ClCompile Include="Lib\Bcj2.c">
-      <Filter>Source Files\7z</Filter>
-    </ClCompile>
-    <ClCompile Include="Lib\Bcj2Enc.c">
-      <Filter>Source Files\7z</Filter>
-    </ClCompile>
-    <ClCompile Include="Lib\Bra.c">
-      <Filter>Source Files\7z</Filter>
-    </ClCompile>
-    <ClCompile Include="Lib\Bra86.c">
-      <Filter>Source Files\7z</Filter>
-    </ClCompile>
-    <ClCompile Include="Lib\BraIA64.c">
-      <Filter>Source Files\7z</Filter>
-    </ClCompile>
-    <ClCompile Include="Lib\CpuArch.c">
-      <Filter>Source Files\7z</Filter>
-    </ClCompile>
-    <ClCompile Include="Lib\Delta.c">
-      <Filter>Source Files\7z</Filter>
-    </ClCompile>
-    <ClCompile Include="Lib\DllSecur.c">
-      <Filter>Source Files\7z</Filter>
-    </ClCompile>
-    <ClCompile Include="Lib\LzFind.c">
-      <Filter>Source Files\7z</Filter>
-    </ClCompile>
-    <ClCompile Include="Lib\LzFindMt.c">
-      <Filter>Source Files\7z</Filter>
-    </ClCompile>
-    <ClCompile Include="Lib\Lzma86Dec.c">
-      <Filter>Source Files\7z</Filter>
-    </ClCompile>
-    <ClCompile Include="Lib\Lzma86Enc.c">
-      <Filter>Source Files\7z</Filter>
-    </ClCompile>
-    <ClCompile Include="Lib\LzmaDec.c">
-      <Filter>Source Files\7z</Filter>
-    </ClCompile>
-    <ClCompile Include="Lib\LzmaEnc.c">
-      <Filter>Source Files\7z</Filter>
-    </ClCompile>
-    <ClCompile Include="Lib\LzmaLib.c">
-      <Filter>Source Files\7z</Filter>
-    </ClCompile>
-    <ClCompile Include="Lib\Sort.c">
-      <Filter>Source Files\7z</Filter>
-    </ClCompile>
-    <ClCompile Include="Lib\Threads.c">
-      <Filter>Source Files\7z</Filter>
-    </ClCompile>
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="Lib\7z.h">
-      <Filter>Header Files\zip</Filter>
-    </ClInclude>
-    <ClInclude Include="Lib\7zAlloc.h">
-      <Filter>Header Files\zip</Filter>
-    </ClInclude>
-    <ClInclude Include="Lib\7zBuf.h">
-      <Filter>Header Files\zip</Filter>
-    </ClInclude>
-    <ClInclude Include="Lib\7zCrc.h">
-      <Filter>Header Files\zip</Filter>
-    </ClInclude>
-    <ClInclude Include="Lib\7zTypes.h">
-      <Filter>Header Files\zip</Filter>
-    </ClInclude>
-    <ClInclude Include="Lib\7zVersion.h">
-      <Filter>Header Files\zip</Filter>
-    </ClInclude>
-    <ClInclude Include="Lib\Alloc.h">
-      <Filter>Header Files\zip</Filter>
-    </ClInclude>
-    <ClInclude Include="Lib\Bcj2.h">
-      <Filter>Header Files\zip</Filter>
-    </ClInclude>
-    <ClInclude Include="Lib\Bra.h">
-      <Filter>Header Files\zip</Filter>
-    </ClInclude>
-    <ClInclude Include="Lib\Compiler.h">
-      <Filter>Header Files\zip</Filter>
-    </ClInclude>
-    <ClInclude Include="Lib\CpuArch.h">
-      <Filter>Header Files\zip</Filter>
-    </ClInclude>
-    <ClInclude Include="Lib\Delta.h">
-      <Filter>Header Files\zip</Filter>
-    </ClInclude>
-    <ClInclude Include="Lib\DllSecur.h">
-      <Filter>Header Files\zip</Filter>
-    </ClInclude>
-    <ClInclude Include="Lib\LzFind.h">
-      <Filter>Header Files\zip</Filter>
-    </ClInclude>
-    <ClInclude Include="Lib\LzFindMt.h">
-      <Filter>Header Files\zip</Filter>
-    </ClInclude>
-    <ClInclude Include="Lib\LzHash.h">
-      <Filter>Header Files\zip</Filter>
-    </ClInclude>
-    <ClInclude Include="Lib\Lzma86.h">
-      <Filter>Header Files\zip</Filter>
-    </ClInclude>
-    <ClInclude Include="Lib\LzmaDec.h">
-      <Filter>Header Files\zip</Filter>
-    </ClInclude>
-    <ClInclude Include="Lib\LzmaEnc.h">
-      <Filter>Header Files\zip</Filter>
-    </ClInclude>
-    <ClInclude Include="Lib\LzmaLib.h">
-      <Filter>Header Files\zip</Filter>
-    </ClInclude>
-    <ClInclude Include="Lib\Precomp.h">
-      <Filter>Header Files\zip</Filter>
-    </ClInclude>
-    <ClInclude Include="Lib\RotateDefs.h">
-      <Filter>Header Files\zip</Filter>
-    </ClInclude>
-    <ClInclude Include="Lib\Sort.h">
-      <Filter>Header Files\zip</Filter>
-    </ClInclude>
-    <ClInclude Include="Lib\Threads.h">
-      <Filter>Header Files\zip</Filter>
-    </ClInclude>
     <ClInclude Include="time_prior.h">
       <Filter>Header Files</Filter>
     </ClInclude>
@@ -192,6 +78,108 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="orz_state.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="Lib\CPP\7zip\Common\InBuffer.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="Lib\CPP\7zip\Common\OutBuffer.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="Lib\CPP\7zip\Common\StdAfx.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="Lib\CPP\7zip\Common\StreamUtils.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="Lib\CPP\7zip\Compress\LZMA\LZMA.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="Lib\CPP\7zip\Compress\LZMA\LZMADecoder.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="Lib\CPP\7zip\Compress\LZMA\LZMAEncoder.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="Lib\CPP\7zip\Compress\LZMA\StdAfx.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="Lib\CPP\7zip\Compress\LZ\LZOutWindow.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="Lib\CPP\7zip\Compress\LZ\StdAfx.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="Lib\CPP\7zip\Compress\RangeCoder\RangeCoder.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="Lib\CPP\7zip\Compress\RangeCoder\RangeCoderBit.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="Lib\CPP\7zip\Compress\RangeCoder\RangeCoderBitTree.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="Lib\CPP\7zip\Compress\RangeCoder\RangeCoderOpt.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="Lib\CPP\7zip\Compress\RangeCoder\StdAfx.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="Lib\CPP\7zip\ICoder.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="Lib\CPP\7zip\IDecl.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="Lib\CPP\7zip\IStream.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="Lib\CPP\Common\Defs.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="Lib\CPP\Common\MyCom.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="Lib\CPP\Common\MyException.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="Lib\CPP\Common\MyGuidDef.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="Lib\CPP\Common\MyInitGuid.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="Lib\CPP\Common\MyUnknown.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="Lib\CPP\Common\MyWindows.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="Lib\CPP\Common\NewHandler.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="Lib\CPP\Common\Types.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="Lib\C\7zCrc.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="Lib\C\Alloc.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="Lib\C\Compress\Lz\LzHash.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="Lib\C\Compress\Lz\MatchFinder.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="Lib\C\IStream.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="Lib\C\Types.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="lzma.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="orz_shared.h">

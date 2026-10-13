@@ -1,0 +1,15 @@
+name: LZMA SDK tests
+on: [push, pull_request]
+jobs:
+  windows:
+    runs-on: windows-2025
+    strategy:
+      matrix:
+        architecture: [Win32, x64]
+    steps:
+      - uses: actions/checkout@v4
+      - run: cmake -S . -B build -A ${{ matrix.architecture }}
+      - run: cmake --build build --config Release --parallel
+      - run: ctest --test-dir build -C Release --output-on-failure
+      - uses: microsoft/setup-msbuild@v2
+      - run: msbuild osu_replay_zip.vcxproj /p:Configuration=Release /p:Platform=${{ matrix.architecture }} /p:PlatformToolset=v143 /m
