@@ -171,11 +171,7 @@ struct _key_data_constructor {
 
 	void tick_std(u32 keys) {
 
-		if (keys & 4)
-			keys &= ~u32(1);
-
-		if (keys & 8)
-			keys &= ~u32(2);
+		keys ^= (keys >> 2) & 3;
 
 		tick(keys);
 
@@ -447,7 +443,7 @@ namespace mania { void encode(const char* output_file, const _osr& r, const u32 
 namespace taiko { void encode(const char* output_file, const _osr& r, const u32 flags, orz_state& state); }
 namespace fruits { void encode(const char* output_file, const _osr& r, const u32 flags, orz_state& state); }
 
-void encode_replay(const char* output_file, _osr& r, const u32 flags, orz_state& state) {
+void encode_replay(const char* output_file, _osr& r, const u32 flags, orz_state& state, bool relax) {
 
 	if (flags & ORZ_FLAG::gamemode_mania)
 		return mania::encode(output_file, r, flags, state);
@@ -455,7 +451,8 @@ void encode_replay(const char* output_file, _osr& r, const u32 flags, orz_state&
 	if (flags & ORZ_FLAG::gamemode_taiko)
 		return taiko::encode(output_file, r, flags, state);
 
-	if (flags & ORZ_FLAG::gamemode_fruits)
+	// CTB replays with relax map the catcher to the x of the cursor, encode the replay through the standard encoder to catch this
+	if ((flags & ORZ_FLAG::gamemode_fruits) && !relax)
 		return fruits::encode(output_file, r, flags, state);
 
 	standard::encode(output_file, r, flags, state);
@@ -524,25 +521,48 @@ static void encode_osr(const char* in_file, const char* out_file, u32 flags, orz
 
 	size_t lzma_offset{}, lzma_size{ file_size };
 
+	bool relax{ (state.options & ENCODE_RELAX) != 0 };
+
 	auto& header_bytes{ state.osr_header };
 
 	if (flags & ORZ_FLAG::has_osr_header) {
 
-		if (raw_file[0] > 3)
+		if (raw_file[0] > 3) // if the osr isnt for one of the main 4 game modes, abort
 			return;
 
 		flags |= 1u << raw_file[0];
 
 		const bool ok {
 			skip(1) && skip(4) && // gamemode, game version
-			skip_string() && skip_string() && skip_string() && // beatmap hash, player name, replay hash
-			skip(2 * 6) && skip(4) && skip(2) && skip(1) && skip(4) // hit counts, score, combo, perfect, mods
+			skip_string() && skip_string() && skip_string() // beatmap hash, player name, replay hash
 		};
 
 		if (!ok)
 			return;
 
-		// life bar: stored in its own stream, the header bytes keep everything around it
+		#pragma pack(push, 1)
+
+		struct _osr_header_values {
+
+			i16 hit_300, hit_100, hit_50, geki, katsu, misses;
+
+			i32 score;
+			u16 combo;
+			u8 perfect;
+
+			u32 mods;
+
+		};
+
+		#pragma pack(pop)
+
+		const auto* header_values{ (const _osr_header_values*)(raw_file.data() + pos) };
+
+		if (!skip(sizeof(_osr_header_values)))
+			return;
+
+		relax |= (header_values->mods & OSR_MOD_RELAX) != 0;
+
 		const size_t life_start{ pos };
 
 		if (!skip_string())
@@ -692,7 +712,7 @@ static void encode_osr(const char* in_file, const char* out_file, u32 flags, orz
 
 	}
 
-	encode_replay(out_file, replay_stream, flags | text_flags, state);
+	encode_replay(out_file, replay_stream, flags | text_flags, state, relax);
 
 	if ((state.options & ENCODE_CHECK_ROUND_TRIP) && !orz_round_trip_ok(state.output, state.text))
 		write_verbatim();

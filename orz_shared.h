@@ -31,6 +31,9 @@ typedef uint16_t u16;
 typedef uint32_t u32;
 typedef uint64_t u64;
 
+typedef int8_t i8;
+typedef int16_t i16;
+typedef int32_t i32;
 typedef int64_t i64;
 
 // MSVC generates terrible code for std::bit_cast<float>(u32) - have to use this
@@ -69,10 +72,6 @@ enum ORZ_FLAG {
 	taiko_keys = 1 << 9, // osu!taiko positions from the keys, rc time
 	fruits_catcher = 1 << 10, // catcher positions against a movement prediction
 
-	// osu! standard replay that has k1 without m1 set
-	// mostly for osu!auto generated replays
-	keys_unfolded = 1 << 11, 
-
 };
 
 enum ORZ_OPTION : u32 {
@@ -83,7 +82,12 @@ enum ORZ_OPTION : u32 {
 
 	DECODE_SKIP_CRC = 1 << 2,
 
+	ENCODE_RELAX = 1 << 3,
+	ENCODE_AUTOPILOT = 1 << 4,
+
 };
+
+constexpr u32 OSR_MOD_RELAX{ 1 << 7 };
 
 enum class orz_tag : u8 {
 

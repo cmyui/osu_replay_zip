@@ -31,29 +31,17 @@ namespace standard {
 
 	static device_shared shared_streams(const _osr& r, const u32 flags, orz_state& state) {
 
-		// k1+k2 normally always come with m1+m2 set - so we fold them
-		bool foldable{ true };
-
-		for (const auto& f : r)
-			foldable &= !((f.keys & 4) && !(f.keys & 1)) && !((f.keys & 8) && !(f.keys & 2));
-
 		device_shared sh{ { &state }, { &state }, &r };
 
 		sh.time.frame_count = (u32)r.size();
-		sh.time.flags = flags | (foldable ? 0u : u32(ORZ_FLAG::keys_unfolded));
+		sh.time.flags = flags;
 
 		encode_delta_time(r, sh.time);
 
 		_key_data_constructor kd{};
 
-		for (const auto& f : r) {
-
-			if (foldable)
-				kd.tick_std(f.keys);
-			else
-				kd.tick(f.keys);
-
-		}
+		for (const auto& f : r)
+			kd.tick_std(f.keys);
 
 		sh.osr.add_osr_parts(kd);
 

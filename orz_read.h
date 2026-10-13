@@ -147,30 +147,8 @@ static bool decode_frames(const std::vector<u8>& raw_bytes, const u32 options, _
 
 		};
 
-		// every key bit as stored (other modes, and osu! standard replays that can not be folded)
-		if (header->flags & (ORZ_FLAG::gamemode_mania | ORZ_FLAG::gamemode_taiko | ORZ_FLAG::gamemode_fruits | ORZ_FLAG::keys_unfolded)) {
-
-			for (u32 key_check{ flags }; key_check; key_check &= key_check - 1)
-				read_key(1u << std::countr_zero(key_check));
-
-		} else {
-
-			if (flags & (1 << 0))
-				read_key(1);
-
-			if (flags & (1 << 1))
-				read_key(2);
-
-			if (flags & (1 << 2))
-				read_key(1 | 4);
-
-			if (flags & (1 << 3))
-				read_key(2 | 8);
-
-			if (flags & (1 << 4))
-				read_key(16);
-
-		}
+		for (u32 key_check{ flags }; key_check; key_check &= key_check - 1)
+			read_key(1u << std::countr_zero(key_check));
 
 	}
 
@@ -180,8 +158,15 @@ static bool decode_frames(const std::vector<u8>& raw_bytes, const u32 options, _
 		taiko::decode(header, stream_data, R);
 	else if (header->flags & ORZ_FLAG::fruits_catcher)
 		fruits::decode(header, stream_data, R);
-	else if (!standard::decode(header, stream_data, R))
-		return false;
+	else {
+
+		for (auto& f : R)
+			f.keys ^= (f.keys >> 2) & 3;
+
+		if (!standard::decode(header, stream_data, R))
+			return false;
+
+	}
 
 	// readd the closing seed frame
 	if (const auto& seed{ stream_data[orz_tag::seed] }; seed.size() == 4)
