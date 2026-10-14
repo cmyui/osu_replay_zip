@@ -218,6 +218,9 @@
     <ClInclude Include="orz_dotnet.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="orz_ap_path.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
     <ClInclude Include="orz_device_std.h">
       <Filter>Header Files</Filter>
     </ClInclude>

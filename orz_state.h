@@ -21,6 +21,8 @@ struct _osr_bytes {
 struct orz_state {
 
 	u32 options{}; // ORZ_OPTION
+	bool autopilot{};
+	float autopilot_rate{ 1.f };
 	bool exact_text{}; // shortest round-trip strings
 
 	std::vector<u8> osr_header;
