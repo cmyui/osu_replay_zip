@@ -54,8 +54,8 @@ namespace frames {
 		}
 
 		// tables follow the replay's length up to a cap (the frame count of a file to decode is untrusted),
-		// and are larger when training priors
-		void init(size_t frames, bool record_keys = false) {
+		// and are larger when training priors. The keys and time models, which every mode uses:
+		void init_keys_time(size_t frames, bool record_keys = false) {
 
 			const int b{ (int)std::bit_width(frames) }, extra{ record_keys ? 4 : 0 };
 
@@ -63,8 +63,17 @@ namespace frames {
 			keys_changed.init(7, std::clamp(b + 4, 16, 22 + extra), 1, 64, 64, record_keys);
 			keys_bits.init(6, std::clamp(b + 2, 14, 20 + extra), 1, 64, 64, record_keys);
 			keys_high.init(1, 8, 1, 1, 1, record_keys);
-			repeat.init(7, std::clamp(b + 4, 16, 22 + extra), 1, 64, 64, record_keys);
 			time.init(6, std::clamp(b, 12, 16 + extra), 64, 64 * 3, 64 * 3, record_keys);
+
+		}
+
+		void init(size_t frames, bool record_keys = false) {
+
+			const int b{ (int)std::bit_width(frames) }, extra{ record_keys ? 4 : 0 };
+
+			init_keys_time(frames, record_keys);
+
+			repeat.init(7, std::clamp(b + 4, 16, 22 + extra), 1, 64, 64, record_keys);
 			move.init(6, std::clamp(b + 3, 12, 19 + extra), 32, MOVE_STEPS * 4, MOVE_STEPS * 32, record_keys);
 			move_bits.init(2, std::clamp(b + 2, 12, 20 + extra), 1, 8 * 4, 8 * 32, record_keys);
 			slack.init(1, std::clamp(b - 2, 10, 16), 16, 64, 64, record_keys);
@@ -120,6 +129,243 @@ namespace frames {
 
 		return (u64(1) << n) | raw(c, v, n);
 	}
+
+	FORCEINLINE u64 delta_bucket(int d) {
+		return (u64)std::clamp(d, -2, 40) + 2;
+	}
+
+	// keys as press / release events: whether any key changes, then each key's flip, against the rhythm of earlier
+	// presses and holds. Flips from bit `bits` up are coded raw.
+	struct _key_coder {
+
+		static constexpr int MAX_BITS{ 31 };
+
+		int bits;
+
+		i64 last_change{ -100000 }, last_press{ -100000 }, press_interval{}, prev_hold{};
+		i64 press_start[MAX_BITS]{}, key_last_press[MAX_BITS]{}, key_interval[MAX_BITS]{}, key_prev_hold[MAX_BITS]{};
+		int frames_since_change{}, last_key{ -1 }, prev_key{ -1 };
+
+		explicit _key_coder(int bits_) : bits{ std::clamp(bits_, 1, MAX_BITS) } {
+
+			for (auto& v : key_last_press)
+				v = -100000;
+
+		}
+
+		// the keys of the frame starting at now, after pk. d1: the previous delta's bucket, phase: now's time grid bin
+		template<typename Coder>
+		u32 code(Coder& c, _models& M, u32 pk, u32 want, i64 now, u64 d1, u64 phase) {
+
+			const bool down{ (pk & ((1u << bits) - 1)) != 0 };
+
+			i64 held{};
+
+			if (down) {
+
+				i64 earliest{ now };
+
+				for (int b{}; b < bits; ++b)
+					if ((pk >> b) & 1)
+						earliest = std::min(earliest, press_start[b]);
+
+				held = now - earliest;
+
+			}
+
+			const u64 rhythm{ ratio_bucket(now - last_press, press_interval) }, hold{ down ? ratio_bucket(held, prev_hold) : 34 };
+
+			// the released key closest to its usual press interval
+			u64 due{ 33 };
+
+			for (int b{}, best{ 1000 }; b < bits; ++b) {
+
+				if (key_interval[b] <= 0 || ((pk >> b) & 1))
+					continue;
+
+				const u64 q{ ratio_bucket(now - key_last_press[b], key_interval[b]) };
+
+				if (std::abs((int)q - 8) < best) {
+
+					best = std::abs((int)q - 8);
+					due = q;
+
+				}
+
+			}
+
+			const u64 s{ std::min<u64>(pk, 63) };
+			const u64 ctx[7]{
+				(s * 40 + due) * 2,
+				s * 32 + log_bucket(now - last_change),
+				s * 40 + rhythm,
+				s * 40 + hold,
+				((s * 64 + d1) * 32 + phase) * 2,
+				(s * 32 + log_bucket(press_interval)) * 32 + log_bucket(now - last_press),
+				(s * 32 + (u64)std::min(frames_since_change, 31)) * 32 + log_bucket(now - last_change),
+			};
+
+			if (!M.keys_changed.code(c, want != pk, ctx, s, s))
+				return pk;
+
+			const u32 flip{ want ^ pk };
+
+			u32 flipped{};
+
+			for (int b{}; b < bits; ++b) {
+
+				const u64 is_down{ (pk >> b) & 1 };
+				const u64 key_rhythm{ ratio_bucket(now - key_last_press[b], key_interval[b]) };
+				const u64 key_hold{ is_down ? ratio_bucket(now - press_start[b], key_prev_hold[b]) : 34 };
+				const u64 bctx[6]{
+					(((u64)b * 40 + key_rhythm) * 40 + key_hold) * 2 + is_down,
+					(u64)b * 64 + log_bucket(now - key_last_press[b]) * 2 + is_down,
+					(s * 64 + (flipped & 63)) * 32 + (u64)b,
+					(((u64)b * 33 + (u64)(last_key + 1)) * 33 + (u64)(prev_key + 1)) * 2 + is_down,
+					((u64)b * 40 + rhythm) * 2 + is_down,
+					((u64)b * 40 + hold) * 2 + is_down,
+				};
+
+				const size_t set{ (size_t)b * 2 + (size_t)is_down };
+
+				flipped |= (u32)M.keys_bits.code(c, (int)((flip >> b) & 1), bctx, set, set) << b;
+
+			}
+
+			// a change above the modelled keys (never seen in osu!standard, kept for exactness)
+			const u64 hctx[1]{ flipped != 0 };
+			const u32 high{ flipped == 0 || M.keys_high.code(c, (flip >> bits) != 0, hctx, 0, 0) ?
+				(u32)raw(c, flip >> bits, 32 - bits) : 0u };
+
+			return pk ^ (flipped | (high << bits));
+		}
+
+		// the frame ending at t went from pk to k
+		void update(u32 pk, u32 k, i64 t) {
+
+			if (k == pk) {
+
+				++frames_since_change;
+
+				return;
+			}
+
+			const u32 pressed{ k & ~pk }, released{ pk & ~k };
+
+			for (int b{}; b < bits; ++b) {
+
+				if ((released >> b) & 1) {
+
+					prev_hold = t - press_start[b];
+					key_prev_hold[b] = prev_hold;
+
+				}
+
+				if ((pressed >> b) & 1) {
+
+					key_interval[b] = t - key_last_press[b];
+					key_last_press[b] = t;
+
+				}
+
+			}
+
+			if (pressed & ((1u << bits) - 1)) {
+
+				press_interval = t - last_press;
+				last_press = t;
+
+				for (int b{}; b < bits; ++b) {
+
+					if ((pressed >> b) & 1) {
+
+						press_start[b] = t;
+						prev_key = last_key;
+						last_key = b;
+
+					}
+
+				}
+
+			}
+
+			last_change = t;
+			frames_since_change = 0;
+
+		}
+
+	};
+
+	// a frame time as a walk over the replay's own delta table: unary over the first LISTED entries (most used first),
+	// a counter per delta value; later ones (rare) as an escaped index
+	struct _time_coder {
+
+		const std::vector<int>& table;
+		int zero_run{}, prev_zero_run{}, one_run{};
+
+		// the delta of frame f = past.size(). kc / kc1: keys changed in this / the previous frame, r: the mode's flag of each
+		// of the last three frames (2 before the first)
+		template<typename Coder>
+		int code(Coder& c, cm::model& m, std::span<const int> past, int want, u64 phase, u64 kc, u64 kc1, const u64 (&r)[3]) {
+
+			const size_t f{ past.size() };
+			const u64 d1{ f >= 1 ? delta_bucket(past[f - 1]) : 50 }, d2{ f >= 2 ? delta_bucket(past[f - 2]) : 50 },
+				d3{ f >= 3 ? delta_bucket(past[f - 3]) : 50 }, d4{ f >= 4 ? delta_bucket(past[f - 4]) : 50 };
+
+			i64 span{};
+			int count{};
+
+			for (size_t j{ f }; j > 0 && count < 16; --j, ++count)
+				span += std::max(0, past[j - 1]);
+
+			const u64 rate{ (u64)std::min<i64>(span * 4 / std::max(count, 1), 127) };
+			const u64 ctx[6]{
+				(d1 * 64 + d2) * 3 + kc,
+				((d1 * 64 + d2) * 64 + d3) * 64 + d4,
+				(((u64)std::min(zero_run, 15) * 16 + (u64)std::min(prev_zero_run, 15)) * 16 + (u64)std::min(one_run, 15)) * 3 + kc,
+				((phase * 64 + d1) * 3 + kc) * 2 + kc1,
+				((d1 * 3 + r[0]) * 3 + r[1]) * 3 + r[2],
+				(rate * 64 + d1) * 3 + kc,
+			};
+
+			const size_t regime{ d1 <= 5 ? 0u : d1 <= 13 ? 1u : 2u };
+
+			m.bind(ctx);
+
+			const u32 n{ (u32)table.size() }, listed{ std::min(n, LISTED) };
+			const u32 index{ (u32)(std::find(table.begin(), table.end(), want) - table.begin()) };
+
+			u32 at{};
+
+			for (; at < listed && !(listed == n && at + 1 == listed); ++at) {
+
+				const size_t set{ (size_t)std::min<u32>(at, 63) * 3 + regime };
+
+				if (m.code(c, index == at, (u32)std::clamp(table[at], -2, 61) + 2, set, set))
+					break;
+
+			}
+
+			if (at == listed && listed < n)
+				at = listed + (u32)(gamma(c, index - listed + 1) - 1);
+
+			const int d{ n ? table[std::min(at, n - 1)] : 0 };
+
+			if (d == 0)
+				++zero_run;
+			else {
+
+				prev_zero_run = zero_run;
+				zero_run = 0;
+
+			}
+
+			one_run = d == 1 ? one_run + 1 : 0;
+
+			return d;
+		}
+
+	};
 
 	struct _move_features {
 		int mode, axis, order, bkp, first_miss, prev_miss, sign, run, scale, regime, first_res, prev_res, dt, since_move, gap;
@@ -344,18 +590,10 @@ namespace frames {
 
 		}
 
-		const auto clamp_delta = [](int d) { return (u64)std::clamp(d, -2, 40) + 2; };
+		i64 now{};
 
-		// keys
-		i64 now{}, last_change{ -100000 }, last_press{ -100000 }, press_interval{}, prev_hold{};
-		i64 press_start[KEY_BITS]{}, key_last_press[KEY_BITS], key_interval[KEY_BITS]{}, key_prev_hold[KEY_BITS]{};
-		int frames_since_change{}, last_key{ -1 }, prev_key{ -1 };
-
-		for (auto& v : key_last_press)
-			v = -100000;
-
-		// time
-		int zero_run{}, prev_zero_run{}, one_run{};
+		_key_coder keys{ KEY_BITS };
+		_time_coder time{ side.table };
 
 		// repeat flag
 		int repeat_run{};
@@ -378,152 +616,19 @@ namespace frames {
 		for (size_t f{}; f < frames; ++f) {
 
 			const u32 pk{ f ? fd.keys[f - 1] : 0u };
-			const u64 d1{ f >= 1 ? clamp_delta(fd.delta[f - 1]) : 50 };
+			const u64 phase{ side.grid.bin(now) };
 
-			{ // keys
-
-				const u64 phase{ side.grid.bin(now) };
-				const bool down{ (pk & ((1u << KEY_BITS) - 1)) != 0 };
-
-				i64 held{};
-
-				if (down) {
-
-					i64 earliest{ now };
-
-					for (int b{}; b < KEY_BITS; ++b)
-						if ((pk >> b) & 1)
-							earliest = std::min(earliest, press_start[b]);
-
-					held = now - earliest;
-
-				}
-
-				const u64 rhythm{ ratio_bucket(now - last_press, press_interval) }, hold{ down ? ratio_bucket(held, prev_hold) : 34 };
-
-				// the released key closest to its usual press interval
-				u64 due{ 33 };
-
-				for (int b{}, best{ 1000 }; b < KEY_BITS; ++b) {
-
-					if (key_interval[b] <= 0 || ((pk >> b) & 1))
-						continue;
-
-					const u64 q{ ratio_bucket(now - key_last_press[b], key_interval[b]) };
-
-					if (std::abs((int)q - 8) < best) {
-
-						best = std::abs((int)q - 8);
-						due = q;
-
-					}
-
-				}
-
-				const u64 s{ std::min<u64>(pk, 63) };
-				const u64 ctx[7]{
-					(s * 40 + due) * 2,
-					s * 32 + log_bucket(now - last_change),
-					s * 40 + rhythm,
-					s * 40 + hold,
-					((s * 64 + d1) * 32 + phase) * 2,
-					(s * 32 + log_bucket(press_interval)) * 32 + log_bucket(now - last_press),
-					(s * 32 + (u64)std::min(frames_since_change, 31)) * 32 + log_bucket(now - last_change),
-				};
-
-				const u32 want{ encoding ? fd.keys[f] : 0u };
-
-				u32 k{ pk };
-
-				if (M.keys_changed.code(c, want != pk, ctx, s, s)) {
-
-					const u32 flip{ want ^ pk };
-
-					u32 flipped{};
-
-					for (int b{}; b < KEY_BITS; ++b) {
-
-						const u64 is_down{ (pk >> b) & 1 };
-						const u64 key_rhythm{ ratio_bucket(now - key_last_press[b], key_interval[b]) };
-						const u64 key_hold{ is_down ? ratio_bucket(now - press_start[b], key_prev_hold[b]) : 34 };
-						const u64 bctx[6]{
-							(((u64)b * 40 + key_rhythm) * 40 + key_hold) * 2 + is_down,
-							(u64)b * 64 + log_bucket(now - key_last_press[b]) * 2 + is_down,
-							(s * 64 + (flipped & 63)) * 32 + (u64)b,
-							(((u64)b * 33 + (u64)(last_key + 1)) * 33 + (u64)(prev_key + 1)) * 2 + is_down,
-							((u64)b * 40 + rhythm) * 2 + is_down,
-							((u64)b * 40 + hold) * 2 + is_down,
-						};
-
-						const size_t set{ (size_t)b * 2 + (size_t)is_down };
-
-						flipped |= (u32)M.keys_bits.code(c, (int)((flip >> b) & 1), bctx, set, set) << b;
-
-					}
-
-					// a change outside the buttons above (never seen in osu!standard, kept for exactness)
-					const u64 hctx[1]{ flipped != 0 };
-					const u32 high{ flipped == 0 || M.keys_high.code(c, (flip >> KEY_BITS) != 0, hctx, 0, 0) ?
-						(u32)raw(c, flip >> KEY_BITS, 32 - KEY_BITS) : 0u };
-
-					k = pk ^ (flipped | (high << KEY_BITS));
-
-				}
-
-				fd.keys[f] = k;
-
-			}
+			fd.keys[f] = keys.code(c, M, pk, encoding ? fd.keys[f] : 0u, now, f >= 1 ? delta_bucket(fd.delta[f - 1]) : 50, phase);
 
 			const u32 k{ fd.keys[f] };
 			const bool changed{ k != pk };
 
 			{ // time
 
-				const u64 d2{ f >= 2 ? clamp_delta(fd.delta[f - 2]) : 50 }, d3{ f >= 3 ? clamp_delta(fd.delta[f - 3]) : 50 },
-					d4{ f >= 4 ? clamp_delta(fd.delta[f - 4]) : 50 };
-				const u64 kc{ changed }, kc1{ f ? (u64)(fd.keys[f - 1] != (f > 1 ? fd.keys[f - 2] : 0u)) : 0 };
-				const u64 r1{ f >= 1 ? (u64)fd.repeated[f - 1] : 2 }, r2{ f >= 2 ? (u64)fd.repeated[f - 2] : 2 },
-					r3{ f >= 3 ? (u64)fd.repeated[f - 3] : 2 };
+				const u64 kc1{ f ? (u64)(fd.keys[f - 1] != (f > 1 ? fd.keys[f - 2] : 0u)) : 0 };
+				const u64 r[3]{ f >= 1 ? (u64)fd.repeated[f - 1] : 2, f >= 2 ? (u64)fd.repeated[f - 2] : 2, f >= 3 ? (u64)fd.repeated[f - 3] : 2 };
 
-				i64 span{};
-				int count{};
-
-				for (size_t j{ f }; j > 0 && count < 16; --j, ++count)
-					span += std::max(0, fd.delta[j - 1]);
-
-				const u64 rate{ (u64)std::min<i64>(span * 4 / std::max(count, 1), 127) };
-				const u64 ctx[6]{
-					(d1 * 64 + d2) * 3 + kc,
-					((d1 * 64 + d2) * 64 + d3) * 64 + d4,
-					(((u64)std::min(zero_run, 15) * 16 + (u64)std::min(prev_zero_run, 15)) * 16 + (u64)std::min(one_run, 15)) * 3 + kc,
-					(((u64)side.grid.bin(now) * 64 + d1) * 3 + kc) * 2 + kc1,
-					((d1 * 3 + r1) * 3 + r2) * 3 + r3,
-					(rate * 64 + d1) * 3 + kc,
-				};
-
-				const size_t regime{ d1 <= 5 ? 0u : d1 <= 13 ? 1u : 2u };
-
-				M.time.bind(ctx);
-
-				// unary over the first LISTED table entries, a counter per delta value; later ones (rare) as an escaped index
-				const u32 n{ (u32)side.table.size() }, listed{ std::min(n, LISTED) };
-				const u32 want{ encoding ? (u32)(std::find(side.table.begin(), side.table.end(), fd.delta[f]) - side.table.begin()) : 0u };
-
-				u32 at{};
-
-				for (; at < listed && !(listed == n && at + 1 == listed); ++at) {
-
-					const size_t set{ (size_t)std::min<u32>(at, 63) * 3 + regime };
-
-					if (M.time.code(c, want == at, (u32)std::clamp(side.table[at], -2, 61) + 2, set, set))
-						break;
-
-				}
-
-				if (at == listed && listed < n)
-					at = listed + (u32)(gamma(c, encoding ? want - listed + 1 : 0) - 1);
-
-				fd.delta[f] = n ? side.table[std::min(at, n - 1)] : 0;
+				fd.delta[f] = time.code(c, M.time, std::span{ fd.delta }.first(f), encoding ? fd.delta[f] : 0, phase, changed, kc1, r);
 
 			}
 
@@ -687,67 +792,9 @@ namespace frames {
 
 			}
 
-			// key timing state
-			const i64 t{ now + d_f };
+			now += d_f;
 
-			if (changed) {
-
-				const u32 pressed{ k & ~pk }, released{ pk & ~k };
-
-				for (int b{}; b < KEY_BITS; ++b) {
-
-					if ((released >> b) & 1) {
-
-						prev_hold = t - press_start[b];
-						key_prev_hold[b] = prev_hold;
-
-					}
-
-					if ((pressed >> b) & 1) {
-
-						key_interval[b] = t - key_last_press[b];
-						key_last_press[b] = t;
-
-					}
-
-				}
-
-				if (pressed & ((1u << KEY_BITS) - 1)) {
-
-					press_interval = t - last_press;
-					last_press = t;
-
-					for (int b{}; b < KEY_BITS; ++b) {
-
-						if ((pressed >> b) & 1) {
-
-							press_start[b] = t;
-							prev_key = last_key;
-							last_key = b;
-
-						}
-
-					}
-
-				}
-
-				last_change = t;
-				frames_since_change = 0;
-
-			} else
-				++frames_since_change;
-
-			if (d_f == 0)
-				++zero_run;
-			else {
-
-				prev_zero_run = zero_run;
-				zero_run = 0;
-
-			}
-
-			one_run = d_f == 1 ? one_run + 1 : 0;
-			now = t;
+			keys.update(pk, k, now);
 
 		}
 
