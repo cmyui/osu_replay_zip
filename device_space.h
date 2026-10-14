@@ -922,23 +922,6 @@ namespace dspace {
 		return true;
 	}
 
-	// 0, 1-2, more
-	inline int miss_class(i64 res) {
-
-		const i64 m{ res < 0 ? -res : res };
-
-		return m == 0 ? 0 : m <= 2 ? 1 : 2;
-	}
-
-	// mode, |pred| bucket, axis, first axis miss, previous miss, pred sign, run (0 / same way / reversed)
-	inline u64 move_ctx(const axis_params& p, i64 pred, int a, int first_miss, int prev_miss, int run) {
-
-		const u64 base{ ((u64)p.mode * 32 + (u64)rc::bk(pred)) * 2 + (u64)a };
-		const u64 sign{ pred < 0 ? 0u : pred == 0 ? 1u : 2u };
-
-		return (((base * 3 + (u64)first_miss) * 3 + (u64)prev_miss) * 3 + sign) * 3 + (u64)run;
-	}
-
 	struct move_predictor {
 
 		static constexpr size_t WINDOW_FRAMES{ 8 };
@@ -1009,26 +992,12 @@ namespace dspace {
 			return round_div(pred * A, B);
 		}
 
-		i64 miss[2]{};
-
-		u64 ctx(const axis_params& p, i64 pred, int a, int first_miss) const {
-
-			const i64 h0{ hist[a][0] }, h1{ hist[a][1] };
-
-			const int run{ (h0 == 0 || h1 == 0) ? 0 :
-				((h0 > 0) == (h1 > 0) ? 1 : 2)
-			};
-
-			return move_ctx(p, pred, a, first_miss, miss_class(miss[a]), run);
-		}
-
-		void push(int a, i64 d, i64 pred) {
+		void push(int a, i64 d) {
 
 			for (size_t j{ WINDOW_FRAMES - 1 }; j > 0; --j)
 				hist[a][j] = hist[a][j - 1];
 
 			hist[a][0] = d;
-			miss[a] = d - pred;
 
 		}
 

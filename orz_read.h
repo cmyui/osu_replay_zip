@@ -28,71 +28,8 @@ struct _stream_map {
 
 };
 
-namespace orz {
-
-	inline bool lzma_decomp(const u8* data, size_t size, const _orz_data_block& block, std::vector<u8>& out) {
-
-		if (block.raw_size > ORZ_MAX_STREAM)
-			return false;
-
-		u8 props[LZMA_PROPS_SIZE]{ block.props };
-
-		memcpy(props + 1, &block.raw_size, 4);
-
-		out.resize(block.raw_size);
-
-		SizeT out_size{ block.raw_size }, input_size{ size };
-		ELzmaStatus lzma_status{};
-
-		if (LzmaDecode(out.data(), &out_size, data, &input_size, props,
-			LZMA_PROPS_SIZE, LZMA_FINISH_END, &lzma_status, &lzma_allocFuncs) != SZ_OK)
-			return false;
-
-		out.resize(out_size);
-
-		return true;
-	}
-
-}
-
 namespace standard { bool decode(const _orz_header* header, const _stream_map& stream_data, std::vector<_osr_frame>& R); }
-namespace mania { void decode(const _orz_header* header, const _stream_map& stream_data, std::vector<_osr_frame>& R); }
-namespace taiko { void decode(const _orz_header* header, const _stream_map& stream_data, std::vector<_osr_frame>& R); }
-namespace fruits { u32 decode(const _orz_header* header, const _stream_map& stream_data, std::vector<_osr_frame>& R); }
-
-// the parts of an osr_parts stream (see _orz_construct::add_osr_parts), empty when absent or damaged
-struct _osr_parts {
-
-	std::span<const u8> part[3]; // header, after the life bar, after the replay data
-
-	explicit _osr_parts(std::span<const u8> data) {
-
-		size_t at{};
-
-		for (auto& p : part) {
-
-			u32 size{};
-
-			for (int shift{}; at < data.size() && shift < 35; shift += 7) {
-
-				size |= u32(data[at] & 0x7f) << shift;
-
-				if (!(data[at++] & 0x80))
-					break;
-
-			}
-
-			if (size > data.size() - at)
-				break;
-
-			p = data.subspan(at, size);
-			at += size;
-
-		}
-
-	}
-
-};
+namespace modes { bool decode(const _orz_header* header, const _stream_map& stream_data, std::vector<_osr_frame>& R); }
 
 struct _decoded_orz {
 	_stream_map streams;
@@ -120,79 +57,15 @@ static bool decode_frames(const std::vector<u8>& raw_bytes, const u32 options, _
 		const u8* const data{ raw_bytes.data() + s.offset };
 
 		o.tag = s.tag;
-
-		if (!s.block.is_compressed)
-			o.data.assign(data, data + s.block.size);
-		else if (!orz::lzma_decomp(data, s.block.size, s.block, o.data))
-			return false;
+		o.data.assign(data, data + s.size);
 
 	}
 
 	std::vector<_osr_frame> R(header->frame_count);
 
-	{ // keys
+	const bool other_mode{ (header->flags & (ORZ_FLAG::mania_columns | ORZ_FLAG::taiko_keys | ORZ_FLAG::fruits_catcher)) != 0 };
 
-		const std::vector<u8>& bs{ stream_data[orz_tag::key_bit_stream] };
-
-		u32 flags{};
-
-		if (bs.size() >= 4)
-			memcpy(&flags, bs.data(), 4);
-
-		size_t at{ 4 };
-
-		const auto read_le = [&](size_t n) {
-
-			u32 v{};
-
-			for (size_t i{}; i < n; ++i, ++at)
-				if (at < bs.size())
-					v |= u32(bs[at]) << (8 * i);
-
-			return v;
-		};
-
-		const auto read_key = [&](u32 flag_bits) {
-
-			const i64 frames{ (i64)header->frame_count };
-
-			i64 count{ -1 };
-			size_t runs{};
-
-			for (bool flag{}; count < frames && at < bs.size(); ++runs) {
-
-				u32 v{ read_le(1) };
-
-				if (v == 255 && (v = read_le(2)) == 65535)
-					v = read_le(4);
-
-				const i64 sustain{ 1 + (i64)v };
-
-				if (flag)
-					for (i64 i{ std::max(count, 0ll) }; i < std::min(count + sustain, frames); ++i)
-						R[(size_t)i].keys |= flag_bits;
-
-				count += sustain;
-				flag = !flag;
-
-			}
-
-			at += runs & 1;
-
-		};
-
-		for (u32 key_check{ flags }; key_check; key_check &= key_check - 1)
-			read_key(1u << std::countr_zero(key_check));
-
-	}
-
-	if (header->flags & ORZ_FLAG::mania_columns)
-		mania::decode(header, stream_data, R);
-	else if (header->flags & ORZ_FLAG::taiko_keys)
-		taiko::decode(header, stream_data, R);
-	else if (header->flags & ORZ_FLAG::fruits_catcher)
-		fruits::decode(header, stream_data, R);
-	else if (!standard::decode(header, stream_data, R))
+	if (!(other_mode ? modes::decode(header, stream_data, R) : standard::decode(header, stream_data, R)))
 		return false;
 
 	// readd the closing seed frame
@@ -273,7 +146,7 @@ static bool decode_to_osr(const char* input_file, const char* output_file, const
 
 	const auto& [stream_data, R, flags] { decoded };
 
-	const _osr_parts parts{ stream_data[orz_tag::osr_parts] };
+	const auto parts{ osr_parts::decode(stream_data[orz_tag::osr_parts]) };
 
 	const std::vector<u8> compressed_string{ (flags & ORZ_FLAG::replay_verbatim) ?
 		stream_data[orz_tag::osr_replay_data] :
@@ -286,9 +159,7 @@ static bool decode_to_osr(const char* input_file, const char* output_file, const
 
 		// header chunk, life graph, chunk up to the replay data length
 
-		const auto& header{ parts.part[0] };
-
-		add_to_u8(final_file_output, header.data(), header.size());
+		add_to_u8(final_file_output, parts.header);
 
 		if (const auto& life_raw{ stream_data[orz_tag::life_bar] }; life_raw.size()) {
 
@@ -303,7 +174,7 @@ static bool decode_to_osr(const char* input_file, const char* output_file, const
 		} else
 			final_file_output.push_back(0x00);
 
-		final_file_output.insert(final_file_output.end(), parts.part[1].begin(), parts.part[1].end());
+		add_to_u8(final_file_output, parts.after_life);
 
 		add_to_u8(final_file_output, compressed_string.size());
 
@@ -312,7 +183,7 @@ static bool decode_to_osr(const char* input_file, const char* output_file, const
 	add_to_u8(final_file_output, compressed_string);
 
 	// bytes after the replay data (online score id, extra data), verbatim
-	final_file_output.insert(final_file_output.end(), parts.part[2].begin(), parts.part[2].end());
+	add_to_u8(final_file_output, parts.tail);
 
 	return write_file(output_file, final_file_output);
 }
@@ -336,6 +207,4 @@ bool orz_round_trip_ok(const std::vector<u8>& orz, const std::string& want) {
 
 #include "orz_time.h"
 #include "orz_encoder_std.h"
-#include "orz_encoder_mania.h"
-#include "orz_encoder_taiko.h"
-#include "orz_encoder_fruits.h"
+#include "orz_modes.h"

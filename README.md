@@ -10,26 +10,26 @@ Replay set: https://drive.google.com/file/d/1i2oe929loEzhvCfRYG-DeZZQ_YouaBYD/vi
 Sizes are totals over the whole set: the .osr replay data (LZMA) in, the .orz out, in bytes.
 
 # osu!
-31.006% of the original size (4,162 replays)
+30.617% of the original size (4,162 replays)
 
-226,602,464 -> 70,260,533
+226,602,464 -> 69,379,188
 
 # taiko
-52.759% of the original size (456 replays)
+47.150% of the original size (456 replays)
 
-2,794,427 -> 1,474,303
+2,794,427 -> 1,317,566
 
 # mania
-50.820% of the original size (1,561 replays)
+48.315% of the original size (1,561 replays)
 
-14,573,725 -> 7,406,427
+14,573,725 -> 7,041,322
 
 # fruit
-46.849% of the original size (373 replays)
+45.622% of the original size (373 replays)
 
-10,419,674 -> 4,881,537
+10,419,674 -> 4,753,643
 
 # Total
-33.029% of the original size (6,552 replays)
+32.427% of the original size (6,552 replays)
 
-254,390,290 -> 84,022,800
+254,390,290 -> 82,491,719

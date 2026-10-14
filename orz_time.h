@@ -1,7 +1,5 @@
 #pragma once
 
-#include "time_prior.h"
-
 #include <algorithm>
 #include <cmath>
 #include <span>
@@ -9,28 +7,6 @@
 
 namespace frame_time {
 
-	constexpr int TIME_EXACT{ 64 };
-	constexpr u32 TIME_INC{ 256 };
-
-	static_assert([] {
-		for (const u32 w : TIME_PRIOR_WEIGHT)
-			if (!rc::safe_increment(TIME_EXACT, TIME_INC, w))
-				return false;
-		return true;
-	}(), "time coder increment / prior weight can overflow the 16 bit frequencies");
-
-	enum kind : u32 { osu, mania, taiko, fruits };
-
-	FORCEINLINE rc::value_coder make_coder(kind k) {
-
-		rc::value_coder c{ TIME_EXACT, TIME_INC };
-
-		c.prior = { TIME_PRIOR_ROW.data() + TIME_PRIOR_FIRST_ROW[k], TIME_PRIOR_START, TIME_PRIOR_VALUES, TIME_PRIOR_ROWS[k] };
-		c.prior_weight = TIME_PRIOR_WEIGHT[k];
-
-		return c;
-	}
-	
 	struct _grid_period {
 		i64 num, den;
 	};
@@ -67,20 +43,6 @@ namespace frame_time {
 		}
 
 	};
-
-	FORCEINLINE u64 grid_ctx(bool changed, i64 now, size_t i, const _time_grid& time_grid) {
-		return i < 2 ? 0 : (u64)changed * 25 + time_grid.bin(now);
-	}
-
-	FORCEINLINE std::vector<u8> key_updates(const std::vector<_osr_frame>& r) {
-
-		std::vector<u8> c(r.size());
-
-		for (size_t i{ 1 }; i < r.size(); ++i)
-			c[i] = r[i].keys != r[i - 1].keys;
-
-		return c;
-	}
 
 	FORCEINLINE std::vector<int> deltas(const std::vector<_osr_frame>& r) {
 
@@ -196,96 +158,6 @@ namespace frame_time {
 			grid |= (u32)small_read<1>(t, bit) << b;
 
 		return table;
-	}
-	
-	template<typename Ctx>
-	std::vector<u8> write_indices(kind k, const std::vector<int>& table, std::span<const int> delta, Ctx ctx) {
-
-		rc::rc_encoder e{};
-		rc::value_coder coder{ make_coder(k) };
-
-		i64 now{};
-
-		for (size_t i{}; i < delta.size(); ++i) {
-
-			const u32 index{ (u32)(std::find(table.begin(), table.end(), delta[i]) - table.begin()) };
-
-			coder.encode(e, ctx(i, now), index);
-
-			now += delta[i];
-
-		}
-
-		return e.finish();
-	}
-	
-	template<typename Ctx, typename Set>
-	void read_indices(std::span<const u8> data, kind k, const std::vector<int>& table, size_t n, Ctx ctx, Set set) {
-
-		rc::rc_decoder d{ data };
-		rc::value_coder coder{ make_coder(k) };
-
-		i64 now{};
-
-		for (size_t i{}; i < n; ++i) {
-
-			const u64 index{ coder.decode(d, ctx(i, now)) };
-			const int delta{ index < table.size() ? table[index] : 0 };
-
-			set(i, delta);
-
-			now += delta;
-
-		}
-
-	}
-	
-	inline void write_grid(_orz_construct& orz, orz_tag tag, kind k, const std::vector<int>& delta, const std::vector<u8>& changed) {
-
-		const auto table{ build_table(delta) };
-		const u32 grid{ pick_grid(delta) };
-
-		bit_stream t{};
-
-		write_table(t, table, grid);
-
-		const _time_grid time_grid{ grid };
-
-		const auto indices{ write_indices(k, table, delta, [&](size_t i, i64 now) {
-
-			return grid_ctx(changed[i], now, i, time_grid);
-		}) };
-
-		add_to_u8(t.data, indices);
-
-		orz.add_stream(tag, t.data.data(), t.data.size());
-
-	}
-
-	inline std::vector<int> read_grid(const _stream_map& stream_data, orz_tag tag, kind k, const std::vector<u8>& changed) {
-
-		std::vector<int> delta(changed.size());
-
-		const auto& data{ stream_data[tag] };
-
-		size_t bit{};
-		u32 grid{};
-
-		const auto table{ read_table(_bit_view{ data }, bit, grid) };
-		const _time_grid time_grid{ grid };
-
-		read_indices(std::span{ data }.subspan(std::min(data.size(), (bit + 7) / 8)), k, table, delta.size(),
-			[&](size_t i, i64 now) {
-
-				return grid_ctx(changed[i], now, i, time_grid);
-			},
-			[&](size_t i, int d) {
-
-				delta[i] = d;
-
-			});
-
-		return delta;
 	}
 
 }

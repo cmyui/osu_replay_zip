@@ -184,7 +184,6 @@
     <ClInclude Include="cm.h" />
     <ClInclude Include="device_space.h" />
     <ClInclude Include="frames_prior.h" />
-    <ClInclude Include="fruits_prior.h" />
     <ClInclude Include="Lib\7z.h" />
     <ClInclude Include="Lib\7zAlloc.h" />
     <ClInclude Include="Lib\7zBuf.h" />
@@ -210,15 +209,15 @@
     <ClInclude Include="Lib\Sort.h" />
     <ClInclude Include="Lib\Threads.h" />
     <ClInclude Include="life_prior.h" />
+    <ClInclude Include="orz_autopilot.h" />
     <ClInclude Include="orz_decimal.h" />
     <ClInclude Include="orz_device_std.h" />
     <ClInclude Include="orz_dotnet.h" />
-    <ClInclude Include="orz_encoder_fruits.h" />
-    <ClInclude Include="orz_encoder_mania.h" />
     <ClInclude Include="orz_encoder_std.h" />
-    <ClInclude Include="orz_encoder_taiko.h" />
     <ClInclude Include="orz_frames.h" />
     <ClInclude Include="orz_life.h" />
+    <ClInclude Include="orz_modes.h" />
+    <ClInclude Include="orz_parts.h" />
     <ClInclude Include="orz_read.h" />
     <ClInclude Include="orz_shared.h" />
     <ClInclude Include="orz_state.h" />
@@ -226,7 +225,6 @@
     <ClInclude Include="orz_time.h" />
     <ClInclude Include="orz_write.h" />
     <ClInclude Include="rc.h" />
-    <ClInclude Include="time_prior.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

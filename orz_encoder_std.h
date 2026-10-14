@@ -96,6 +96,115 @@ namespace standard {
 	}
 
 	
+	// autopilot parameters, after the device model in the head of the frames stream
+	inline void write_autopilot(const autopilot::_params& ap, bit_stream& o) {
+
+		o.push_back(ap.on);
+
+		if (!ap.on)
+			return;
+
+		small_write<2>(ap.rate, o);
+		dspace::write_u(ap.width, o);
+		dspace::write_u(ap.height, o);
+
+	}
+
+	inline bool read_autopilot(const _bit_view in, size_t& i, autopilot::_params& ap) {
+
+		ap = {};
+		ap.on = small_read<1>(in, i) != 0;
+
+		if (!ap.on)
+			return true;
+
+		ap.rate = small_read<2>(in, i);
+		ap.width = dspace::read_u(in, i);
+		ap.height = dspace::read_u(in, i);
+
+		return ap.rate < autopilot::RATE_COUNT && ap.width && ap.height && ap.width <= (1 << 15) && ap.height <= (1 << 15);
+	}
+
+	// window sizes tried for autopilot, the common ones first
+	constexpr std::pair<u32, u32> AUTOPILOT_WINDOWS[]{
+		{ 1920, 1080 }, { 2560, 1440 }, { 1366, 768 }, { 1280, 720 }, { 1600, 900 }, { 1680, 1050 }, { 1440, 900 }, { 1280, 1024 },
+		{ 1024, 768 }, { 800, 600 }, { 1280, 960 }, { 1360, 768 }, { 1536, 864 }, { 2560, 1080 }, { 3440, 1440 }, { 1280, 800 },
+		{ 1920, 1200 }, { 2560, 1600 }, { 1600, 1200 },
+	};
+
+	// the new positions with their times and 7 digit ordinals, for autopilot (none for shortest round-trip text)
+	static std::vector<autopilot::sample> autopilot_samples(const _osr& r, const _shared_streams& shared, bool exact_text) {
+
+		if (exact_text)
+			return {};
+
+		std::vector<autopilot::sample> s;
+
+		i64 t{};
+
+		for (size_t i{}; i < r.size(); ++i) {
+
+			t += r[i].delta;
+
+			if (shared.repeated[i]) {
+
+				if (!s.empty())
+					s.back().stays = true;
+
+				continue;
+			}
+
+			autopilot::sample q{ t };
+
+			q.v[0] = r[i].x;
+			q.v[1] = r[i].y;
+
+			if (!dotnet::text_ord(q.v[0], false, q.K[0]) || !dotnet::text_ord(q.v[1], false, q.K[1]))
+				return {};
+
+			s.push_back(q);
+
+		}
+
+		return s;
+	}
+
+	// the window, then the speed, under which fitted moves cover the most of a stretch past the start
+	static autopilot::_params search_autopilot(std::span<const autopilot::sample> s) {
+
+		const size_t skip{ std::min<size_t>(s.size(), 64) };
+		const auto head{ s.subspan(skip, std::min<size_t>(s.size() - skip, 600)) };
+
+		autopilot::_params best{};
+		size_t most{};
+
+		const auto attempt = [&](const autopilot::_params& p) {
+
+			size_t c{};
+
+			autopilot::fitter{ head, p }.fit(c);
+
+			if (c > most) {
+
+				most = c;
+				best = p;
+
+			}
+
+		};
+
+		for (const auto& [w, h] : AUTOPILOT_WINDOWS)
+			attempt({ true, 0, w, h });
+
+		for (u32 rate{ 1 }; rate < autopilot::RATE_COUNT && best.on; ++rate)
+			attempt({ true, rate, best.width, best.height });
+
+		if (most * 10 < head.size())
+			best = {};
+
+		return best;
+	}
+
 	struct _positions {
 
 		_orz_construct streams;
@@ -108,20 +217,23 @@ namespace standard {
 	};
 
 	static _positions position_streams(const dspace::_model_info& m, const std::vector<float> vals[2], const std::vector<int>& dt,
-		const _shared_streams& shared, orz_state& state) {
+		const _shared_streams& shared, orz_state& state, const autopilot::_params& ap = {}, const std::vector<autopilot::event>& moves = {}) {
 
 		_positions p{ { &state } };
 
 		for (int a{}; a < 2; ++a)
 			p.st[a] = dspace::encode_axis_model(m.axis[a], vals[a], dt, state.exact_text);
 
-		// std_frames: delta table and device model, from the next byte the context mixed frames and escape values
+		// frames: delta table and device model, from the next byte the context mixed frames and escape values
 		bit_stream head{};
 
 		frame_time::write_table(head, shared.table, shared.grid);
 		dspace::write_info(m, head);
+		write_autopilot(ap, head);
 
 		frames::_frame_data fd{ shared.delta, shared.keys, shared.repeated };
+
+		fd.moves = moves;
 
 		std::vector<std::pair<float, float>> values[2];
 
@@ -139,11 +251,11 @@ namespace standard {
 
 		}
 
-		const frames::_side side{ m.axis, shared.table, frame_time::_time_grid{ shared.grid }, shared.relax };
+		const frames::_side side{ m.axis, shared.table, frame_time::_time_grid{ shared.grid }, shared.relax, ap };
 
 		add_to_u8(head.data, frames::encode(fd, side, shared.delta.size(), values, state.exact_text));
 
-		p.streams.add_stream(orz_tag::std_frames, head.data.data(), head.data.size());
+		p.streams.add_stream(orz_tag::frames, head.data.data(), head.data.size());
 
 		return p;
 	}
@@ -211,6 +323,17 @@ namespace standard {
 	}
 
 	
+	// the replay's frames with autopilot moves in place of a device model
+	static _positions autopilot_streams(std::span<const autopilot::sample> s, const autopilot::_params& ap, const std::vector<float> vals[2],
+		const std::vector<int>& dt, const _shared_streams& shared, orz_state& state) {
+
+		size_t covered{};
+
+		const auto moves{ autopilot::fitter{ s, ap }.fit(covered) };
+
+		return position_streams(all_text(), vals, dt, shared, state, ap, moves);
+	}
+
 	static bool detect_device_model(orz_state& state, const std::vector<float> vals[2], const std::vector<int>& dt,
 		const _shared_streams& shared, dspace::_model_info& info, _positions& best) {
 
@@ -312,22 +435,49 @@ namespace standard {
 		dspace::_model_info info{ all_text() };
 		_positions best{ { &state } };
 
-		const bool has_model{ !state.debug.disable_device && dt.size() >= 64 && detect_device_model(state, vals, dt, shared, info, best) };
+		// autopilot: clearly autopilot replays skip the device models, others that have none try it against text
+		const auto ap_samples{ autopilot_samples(r, shared, state.exact_text) };
 
-		// both axis' as text, only tried when the model misses 5% or more of an axis's frames
-		const auto misses = [&](int a) {
+		if (const auto ap{ autopilot::detect(ap_samples, AUTOPILOT_WINDOWS, std::size(AUTOPILOT_WINDOWS)) }; ap.on)
+			best = autopilot_streams(ap_samples, ap, vals, dt, shared, state);
+		else {
 
-			return (best.st[a].escapes.size() + best.st[a].repeats) * 20 >= dt.size();
-		};
+			const bool has_model{ !state.debug.disable_device && dt.size() >= 64 && detect_device_model(state, vals, dt, shared, info, best) };
 
-		if (!has_model || misses(0) || misses(1)) {
+			// both axis' as text, only tried when the model misses 5% or more of an axis's frames
+			const auto misses = [&](int a) {
 
-			auto text{ position_streams(all_text(), vals, dt, shared, state) };
+				return (best.st[a].escapes.size() + best.st[a].repeats) * 20 >= dt.size();
+			};
 
-			if (!has_model || text.size() <= best.size()) {
+			if (!has_model || misses(0) || misses(1)) {
 
-				info = all_text();
-				best = std::move(text);
+				auto text{ position_streams(all_text(), vals, dt, shared, state) };
+
+				if (!has_model || text.size() <= best.size()) {
+
+					info = all_text();
+					best = std::move(text);
+
+				}
+
+			}
+
+			const auto text_only = [&](int a) {
+
+				return info.axis[a].seg.size() == 1 && info.axis[a].seg[0].p.mode == dspace::axis_mode::text;
+			};
+
+			if (text_only(0) && text_only(1)) {
+
+				if (const auto search{ search_autopilot(ap_samples) }; search.on) {
+
+					auto moves{ autopilot_streams(ap_samples, search, vals, dt, shared, state) };
+
+					if (moves.size() < best.size())
+						best = std::move(moves);
+
+				}
 
 			}
 
@@ -356,9 +506,9 @@ namespace standard {
 
 	}
 	
-	// the head of std_frames: delta table, time grid and device model; rest: what follows from the next byte
+	// the head of the frames stream: delta table, time grid and device model; rest: what follows from the next byte
 	inline bool read_head(std::span<const u8> data, std::vector<int>& table, u32& grid, dspace::_model_info& info,
-		std::span<const u8>& rest) {
+		autopilot::_params& ap, std::span<const u8>& rest) {
 
 		const _bit_view head{ data };
 
@@ -366,7 +516,7 @@ namespace standard {
 
 		table = frame_time::read_table(head, bit, grid);
 
-		if (!dspace::read_info(head, bit, info))
+		if (!dspace::read_info(head, bit, info) || !read_autopilot(head, bit, ap))
 			return false;
 
 		rest = data.subspan(std::min(data.size(), (bit + 7) / 8));
@@ -381,7 +531,7 @@ namespace standard {
 		u32 grid{};
 		std::span<const u8> rest;
 
-		if (!read_head(stream_data[orz_tag::std_frames], side.table, grid, info, rest))
+		if (!read_head(stream_data[orz_tag::frames], side.table, grid, info, side.ap, rest))
 			return R.empty();
 
 		side.axis = info.axis;
