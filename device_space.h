@@ -5,6 +5,7 @@
 // Frames a model can not reproduce are escaped.
 
 #include <bit>
+#include <climits>
 #include "rc.h"
 #include "device_prior.h"
 #include "orz_text.h"
@@ -1036,10 +1037,11 @@ namespace dspace {
 	struct move_predictor {
 
 		static constexpr size_t WINDOW_FRAMES{ 8 };
-		static constexpr i64 WINDOW_MS{ 8 }, ACCEL_MS{ 12 }, SCALE_MIN{ 4 };
+		static constexpr i64 WINDOW_MS{ 8 }, ACCEL_MS{ 12 }, SCALE_MIN{ 4 }, REST_MS{ 14 };
 
-		std::span<const int> dt;
 		i64 hist[2][WINDOW_FRAMES]{};
+		int hist_dt[WINDOW_FRAMES]{};
+		size_t n{};
 
 		static i64 ms(int v) {
 			return std::clamp(v, 1, 40);
@@ -1050,37 +1052,37 @@ namespace dspace {
 			return n >= 0 ? (n + m / 2) / m : -((-n + m / 2) / m);
 		}
 
-		i64 window(const int a, const size_t i) const {
+		i64 window(const int a, const int dt) const {
 
-			if (i < 2)
+			if (n < 2)
 				return 0;
 
 			i64 moved{}, span{};
 
-			for (size_t j{}; j < WINDOW_FRAMES && j + 2 <= i; ++j) {
+			for (size_t j{}; j < WINDOW_FRAMES && j + 2 <= n; ++j) {
 
 				moved += hist[a][j];
-				span += ms(dt[i - 1 - j]);
+				span += ms(hist_dt[j]);
 
 				if (span >= WINDOW_MS)
 					break;
 			}
 
-			return round_div(moved * ms(dt[i]), std::max(span, 1ll));
+			return round_div(moved * ms(dt), std::max(span, 1ll));
 		}
 
-		i64 pred(int a, size_t i) const {
+		i64 pred(int a, int dt) const {
 
-			i64 p{ window(a, i) };
+			i64 p{ window(a, dt) };
 
-			if (i >= 3 && ms(dt[i]) >= ACCEL_MS && ms(dt[i - 1]) >= ACCEL_MS && ms(dt[i - 2]) >= ACCEL_MS)
+			if (n >= 3 && ms(dt) >= ACCEL_MS && ms(hist_dt[0]) >= ACCEL_MS && ms(hist_dt[1]) >= ACCEL_MS)
 				p += (hist[a][0] - hist[a][1]) * 3 / 8;
 
 			return p;
 		}
 
-		int first(size_t i) const {
-			return std::abs(window(1, i)) > std::abs(window(0, i)) ? 1 : 0;
+		int first(int dt) const {
+			return std::abs(window(1, dt)) > std::abs(window(0, dt)) ? 1 : 0;
 		}
 
 		static i64 scaled(i64 pred, i64 first_d, i64 first_pred) {
@@ -1125,24 +1127,114 @@ namespace dspace {
 
 		}
 
+		void advance(int dt) {
+
+			for (size_t j{ WINDOW_FRAMES - 1 }; j > 0; --j)
+				hist_dt[j] = hist_dt[j - 1];
+
+			hist_dt[0] = dt;
+			++n;
+
+		}
+
+		void rest(int gap) {
+
+			for (int a{}; a < 2; ++a)
+				for (size_t j{ WINDOW_FRAMES - 1 }; j > 0; --j)
+					hist[a][j] = hist[a][j - 1];
+
+			hist[0][0] = hist[1][0] = 0;
+
+			advance(gap);
+
+		}
+
 	};
+		
+	constexpr u32 REPEAT_INC{ 32 };
+	constexpr size_t REPEAT_CONTEXTS{ 16 * 5 * 4 * 4 };
 
-	// shared by encoder and decoder: larger predicted axis first, the second scaled by the first's outcome
-	template<typename Move, typename Escaped, typename Slack>
-	void move_loop(const axis_model p[2], std::span<const int> dt, size_t n, Move move, Escaped escaped, Slack slack) {
+	struct repeat_context {
 
-		move_predictor mp{ dt };
+		std::vector<rc::freq_model> m = std::vector<rc::freq_model>(REPEAT_CONTEXTS, rc::freq_model{ 2, REPEAT_INC });
+		i64 since{};
+		int run{};
 
-		for (size_t i{}; i < n; ++i) {
+		rc::freq_model& model(int delta, i64 moved) {
 
-			const int first{ mp.first(i) };
+			since += delta;
+
+			const size_t s{ (size_t)std::clamp<i64>(since, 0, 15) };
+			const size_t d{ delta <= 0 ? 0u : delta == 1 ? 1u : delta <= 5 ? 2u : delta <= 12 ? 3u : 4u };
+			const size_t mv{ moved == 0 ? 0u : moved <= 2 ? 1u : moved <= 16 ? 2u : 3u };
+
+			return m[((s * 5 + d) * 4 + (size_t)std::min(run, 3)) * 4 + mv];
+		}
+
+		void update(bool repeated) {
+
+			if (repeated) {
+
+				++run;
+
+				return;
+			}
+
+			since = 0;
+			run = 0;
+
+		}
+
+	};
+	
+	template<typename Repeat, typename Move, typename Escaped, typename Slack>
+	void move_loop(const axis_model p[2], std::span<const int> delta, std::vector<int>& dt, Repeat repeat, Move move, Escaped escaped, Slack slack) {
+
+		dt.assign(delta.size(), 0);
+
+		move_predictor mp{};
+		repeat_context rp{};
+
+		size_t i{};
+		i64 elapsed{};
+
+		for (size_t f{}; f < delta.size(); ++f) {
+
+			elapsed += delta[f];
+
+			if (f) {
+
+				const bool repeated{ repeat(rp.model(delta[f], std::abs(mp.hist[0][0]) + std::abs(mp.hist[1][0])), f) };
+
+				rp.update(repeated);
+
+				if (repeated)
+					continue;
+
+			}
+
+			
+			dt[i] = (int)std::clamp<i64>(elapsed, INT_MIN, INT_MAX);
+			
+			int pdt{ dt[i] };
+
+			if (i && elapsed - delta[f] > move_predictor::REST_MS) {
+
+				mp.rest((int)std::clamp<i64>(elapsed - delta[f], INT_MIN, INT_MAX));
+				pdt = delta[f];
+
+			}
+
+			elapsed = 0;
+
+			const int first{ mp.first(pdt) };
 			i64 first_d{}, first_pred{};
 
 			for (int q{}; q < 2; ++q) {
 
 				const int a{ q ? 1 - first : first };
 
-				i64 pr{ mp.pred(a, i) };
+				i64 pr{ mp.pred(a, pdt) };
 
 				if (q)
 					pr = move_predictor::scaled(pr, first_d, first_pred);
@@ -1165,7 +1257,13 @@ namespace dspace {
 
 			}
 
+			mp.advance(pdt);
+
+			++i;
+
 		}
+
+		dt.resize(i);
 
 	}
 
@@ -1182,13 +1280,22 @@ namespace dspace {
 		return false;
 	}
 
-	inline std::vector<u8> write_moves_rc(const axis_model p[2], const axis_streams st[2], std::span<const int> dt) {
+	inline std::vector<u8> write_moves_rc(const axis_model p[2], const axis_streams st[2], std::span<const int> delta,
+		const std::vector<u8>& repeated) {
 
 		rc::rc_encoder e{};
 		rc::value_coder moves{ make_move_coder() }, slack{ 16, SLACK_INC };
 		size_t esc[2]{}, sl[2]{};
 
-		move_loop(p, dt, st[0].K.size(),
+		std::vector<int> dt;
+
+		move_loop(p, delta, dt,
+			[&](rc::freq_model& m, size_t f) {
+
+				m.encode(e, repeated[f]);
+
+				return repeated[f] != 0;
+			},
 			[&](int a, size_t i, u64 ctx, int bit_ctx, i64 pr) {
 
 				const i64 d{ st[a].K[i] - (i ? st[a].K[i - 1] : 0) };
@@ -1215,17 +1322,18 @@ namespace dspace {
 
 		rc::rc_encoder e{};
 		rc::value_coder moves{ make_move_coder() }, slack{ 16, SLACK_INC };
-		move_predictor mp{ dt };
+		move_predictor mp{};
 
 		size_t esc{}, sl{};
 
 		for (size_t i{}; i < st.K.size(); ++i) {
 
 			const i64 d{ st.K[i] - (i ? st.K[i - 1] : 0) };
-			const i64 pr{ mp.pred(a, i) };
+			const i64 pr{ mp.pred(a, dt[i]) };
 
 			moves.encode(e, mp.ctx(p, pr, a, 0), rc::zz(d - pr), move_bit_ctx(p, a));
 			mp.push(a, d, pr);
+			mp.advance(dt[i]);
 
 			if (!next_escape(st.escapes, esc, i) && p.mode == axis_mode::mouse && d != 0)
 				slack.encode(e, a, rc::zz(st.slack[sl++]));
@@ -1236,9 +1344,9 @@ namespace dspace {
 	}
 
 	constexpr i64 MAX_MOVE{ 1ll << 40 }, MAX_K{ 1ll << 50 };
-
+	
 	inline void read_moves_rc(const std::vector<u8>& data, const axis_model p[2], const std::vector<std::pair<u32, float>> escapes[2],
-		std::span<const int> dt, size_t n, std::vector<i64> K[2], std::vector<int> slack_out[2]) {
+		std::span<const int> delta, std::vector<i64> K[2], std::vector<int> slack_out[2], std::vector<int>& dt, std::vector<u8>& repeated) {
 
 		rc::rc_decoder dec{ data };
 		rc::value_coder moves{ make_move_coder() }, slack{ 16, SLACK_INC };
@@ -1246,13 +1354,21 @@ namespace dspace {
 
 		for (int a{}; a < 2; ++a) {
 
-			K[a].assign(n, 0);
+			K[a].assign(delta.size(), 0);
 			slack_out[a].clear();
 
 		}
 
+		repeated.assign(delta.size(), 0);
+
 		// valid moves are far below 2^40 and K far below 2^50
-		move_loop(p, dt, n,
+		move_loop(p, delta, dt,
+			[&](rc::freq_model& m, size_t f) {
+
+				repeated[f] = (u8)m.decode(dec);
+
+				return repeated[f] != 0;
+			},
 			[&](int a, size_t i, u64 ctx, int bit_ctx, i64 pr) {
 
 				const i64 res{ std::clamp(rc::unzz(moves.decode(dec, ctx, bit_ctx)), -MAX_MOVE, MAX_MOVE) };
@@ -1271,6 +1387,9 @@ namespace dspace {
 				slack_out[a].push_back((int)std::clamp<i64>(rc::unzz(slack.decode(dec, a)), -MOUSE_SLACK_RANGE, MOUSE_SLACK_RANGE));
 
 			});
+
+		for (int a{}; a < 2; ++a)
+			K[a].resize(dt.size());
 
 	}
 }

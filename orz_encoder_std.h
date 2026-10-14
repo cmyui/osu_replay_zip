@@ -3,6 +3,7 @@
 #include "orz_device_std.h"
 
 #include <algorithm>
+#include <climits>
 #include <array>
 #include <vector>
 
@@ -23,20 +24,74 @@ namespace standard {
 		});
 
 	}
+		
+	namespace repeat {
 
-	struct device_shared {
+		inline std::vector<u8> flags(const _osr& r) {
+
+			std::vector<u8> repeated(r.size());
+
+			for (size_t i{ 1 }; i < r.size(); ++i)
+				repeated[i] = same_bits(r[i].x, r[i - 1].x) && same_bits(r[i].y, r[i - 1].y);
+
+			return repeated;
+		}
+
+		inline std::vector<int> sample_dt(std::span<const int> delta, const std::vector<u8>& repeated) {
+
+			std::vector<int> dt;
+
+			i64 elapsed{};
+
+			for (size_t i{}; i < delta.size(); ++i) {
+
+				elapsed += delta[i];
+
+				if (repeated[i])
+					continue;
+
+				
+				dt.push_back((int)std::clamp<i64>(elapsed, INT_MIN, INT_MAX));
+
+				elapsed = 0;
+
+			}
+
+			return dt;
+		}
+
+		inline std::vector<u32> sample_of(const std::vector<u8>& repeated) {
+
+			std::vector<u32> s(repeated.size());
+
+			for (size_t i{ 1 }; i < repeated.size(); ++i)
+				s[i] = s[i - 1] + !repeated[i];
+
+			return s;
+		}
+
+	}
+		
+	struct _shared_streams {
 		_orz_construct time, osr;
 		const _osr* frames;
+		std::vector<int> delta;
+		std::vector<u8> repeated;
+		std::vector<u32> sample;
 	};
 
-	static device_shared shared_streams(const _osr& r, const u32 flags, orz_state& state) {
+	static _shared_streams shared_streams(const _osr& r, const u32 flags, orz_state& state) {
 
-		device_shared sh{ { &state }, { &state }, &r };
+		_shared_streams sh{ { &state }, { &state }, &r };
 
 		sh.time.frame_count = (u32)r.size();
 		sh.time.flags = flags;
 
 		encode_delta_time(r, sh.time);
+
+		sh.delta = frame_time::deltas(r);
+		sh.repeated = repeat::flags(r);
+		sh.sample = repeat::sample_of(sh.repeated);
 
 		_key_data_constructor kd{};
 
@@ -48,43 +103,42 @@ namespace standard {
 		return sh;
 	}
 
-	static std::vector<u8> build_device_file(const dspace::_model_info& info, const std::array<dspace::axis_streams, 2>& st,
-		const std::vector<int>& dt, const device_shared& shared, orz_state& state) {
+	
+	struct _positions {
 
-		_orz_construct result{ shared.time };
+		_orz_construct streams;
+		std::array<dspace::axis_streams, 2> st;
 
-		{ // CRC
-
-			const _osr& r{ *shared.frames };
-
-			u32 crc{};
-
-			for (size_t i{}; i < r.size(); ++i)
-				crc = crc32c_frame(crc, { r[i].delta, st[0].decoded[i], st[1].decoded[i], r[i].keys });
-
-			if (state.seed.present)
-				crc = crc32c_frame(crc, { -12345, 0.f, 0.f, state.seed.value });
-
-			result.frames_crc = crc;
-
+		size_t size() const {
+			return streams.file_data.size();
 		}
+
+	};
+
+	static _positions position_streams(const dspace::_model_info& m, const std::vector<float> vals[2], const std::vector<int>& dt,
+		const _shared_streams& shared, orz_state& state) {
+
+		_positions p{ { &state } };
+
+		for (int a{}; a < 2; ++a)
+			p.st[a] = dspace::encode_axis_model(m.axis[a], vals[a], dt, state.exact_text);
 
 		{
 
-			const auto packed{ dspace::write_info(info) };
+			const auto packed{ dspace::write_info(m) };
 
-			result.add_stream(orz_tag::device_space_info, packed.data(), packed.size());
+			p.streams.add_stream(orz_tag::device_space_info, packed.data(), packed.size());
 
 		}
 
-		const auto bytes{ dspace::write_moves_rc(info.axis, st.data(), dt) };
+		const auto bytes{ dspace::write_moves_rc(m.axis, p.st.data(), shared.delta, shared.repeated) };
 
-		result.add_stream(orz_tag::device_moves_rc, bytes.data(), bytes.size());
-		
+		p.streams.add_stream(orz_tag::device_moves_rc, bytes.data(), bytes.size());
+
 		std::vector<u32> index;
 
 		for (int a{}; a < 2; ++a)
-			for (const auto& [f, v] : st[a].escapes)
+			for (const auto& [f, v] : p.st[a].escapes)
 				index.push_back(f * 2 + a);
 
 		std::sort(index.begin(), index.end());
@@ -96,18 +150,42 @@ namespace standard {
 			dspace::write_escape_index(index, e);
 
 			for (int a{}; a < 2; ++a)
-				for (size_t j{}; j < st[a].escapes.size(); ++j)
-					dspace::write_escape_value(st[a].escapes[j].second, st[a].escape_pred[j], values, state.exact_text);
+				for (size_t j{}; j < p.st[a].escapes.size(); ++j)
+					dspace::write_escape_value(p.st[a].escapes[j].second, p.st[a].escape_pred[j], values, state.exact_text);
 
-			result.add_compress_stream(orz_tag::device_escape, e, comp::pos_delta_prop());
-			result.add_compress_stream(orz_tag::device_escape_values, values, comp::pos_delta_prop());
+			p.streams.add_compress_stream(orz_tag::device_escape, e, comp::pos_delta_prop());
+			p.streams.add_compress_stream(orz_tag::device_escape_values, values, comp::pos_delta_prop());
 
 		}
 
+		return p;
+	}
+		
+	static void write_orz(const _positions& p, const _shared_streams& shared, orz_state& state) {
+
+		_orz_construct result{ shared.time };
+
+		const _osr& r{ *shared.frames };
+
+		u32 crc{};
+
+		for (size_t i{}; i < r.size(); ++i) {
+
+			const u32 s{ shared.sample[i] };
+
+			crc = crc32c_frame(crc, { r[i].delta, p.st[0].decoded[s], p.st[1].decoded[s], r[i].keys });
+
+		}
+
+		if (state.seed.present)
+			crc = crc32c_frame(crc, { -12345, 0.f, 0.f, state.seed.value });
+
+		result.frames_crc = crc;
+
+		result.append(p.streams);
 		result.append(shared.osr);
 		result.finish("");
 
-		return std::move(state.output);
 	}
 
 	// axis_mode::none marks what detection could not fit
@@ -145,17 +223,9 @@ namespace standard {
 		return m;
 	}
 
-	static std::vector<u8> build_model_file(const dspace::_model_info& m, const std::vector<float> vals[2], const std::vector<int>& dt,
-		const device_shared& shared, orz_state& state, std::array<dspace::axis_streams, 2>& st) {
-
-		for (int a{}; a < 2; ++a)
-			st[a] = dspace::encode_axis_model(m.axis[a], vals[a], dt, state.exact_text);
-
-		return build_device_file(m, st, dt, shared, state);
-	}
-
+	
 	static bool detect_device_model(orz_state& state, const std::vector<float> vals[2], const std::vector<int>& dt,
-		const device_shared& shared, dspace::_model_info& info, std::vector<u8>& bytes, std::array<dspace::axis_streams, 2>& st) {
+		const _shared_streams& shared, dspace::_model_info& info, _positions& best) {
 
 		// whole replay, one model per axis
 		dspace::_model_info whole{};
@@ -193,13 +263,13 @@ namespace standard {
 		for (int a{}; a < 2 && whole_ok; ++a)
 			try_segments |= (ws[a].escapes.size() + ws[a].repeats) * 100 > vals[a].size() * 3;
 
-		info = {};
-		bytes.clear();
+		bool found{};
 
 		if (whole_any) {
 
-			info = whole;
-			bytes = build_model_file(text_filled(whole), vals, dt, shared, state, st);
+			info = text_filled(whole);
+			best = position_streams(info, vals, dt, shared, state);
+			found = true;
 
 		}
 
@@ -217,15 +287,13 @@ namespace standard {
 
 			if (!seg.axis[0].all_none() || !seg.axis[1].all_none()) {
 
-				std::array<dspace::axis_streams, 2> seg_st;
+				auto p{ position_streams(text_filled(seg), vals, dt, shared, state) };
 
-				auto seg_bytes{ build_model_file(text_filled(seg), vals, dt, shared, state, seg_st) };
+				if (!found || p.size() < best.size()) {
 
-				if (bytes.empty() || seg_bytes.size() < bytes.size()) {
-
-					info = seg;
-					bytes = std::move(seg_bytes);
-					st = std::move(seg_st);
+					info = text_filled(seg);
+					best = std::move(p);
+					found = true;
 
 				}
 
@@ -233,72 +301,52 @@ namespace standard {
 
 		}
 
-		return !bytes.empty();
+		return found;
 	}
 
 	void encode(const char* output_file, const _osr& r, const u32 flags, orz_state& state) {
 
-		const std::vector<int> dt{ frame_time::deltas(r) };
+		const _shared_streams shared{ shared_streams(r, flags, state) };
+
+		const std::vector<int> dt{ repeat::sample_dt(shared.delta, shared.repeated) };
 
 		std::vector<float> vals[2];
 
 		for (size_t i{}; i < r.size(); ++i) {
+
+			if (shared.repeated[i])
+				continue;
 
 			vals[0].push_back(r[i].x);
 			vals[1].push_back(r[i].y);
 
 		}
 
-		const device_shared shared{ shared_streams(r, flags, state) };
-
-		dspace::_model_info detected{};
-		bool has_model{};
-
-		std::vector<u8> model_bytes;
-		std::array<dspace::axis_streams, 2> ms;
-
-		if (!state.debug.disable_device && r.size() >= 64)
-			has_model = detect_device_model(state, vals, dt, shared, detected, model_bytes, ms);
-
 		dspace::_model_info info{ all_text() };
-		std::vector<u8> bytes;
-		std::array<dspace::axis_streams, 2> st;
+		_positions best{ { &state } };
 
-		if (has_model) {
-
-			info = text_filled(detected);
-
-			if (model_bytes.empty())
-				model_bytes = build_model_file(info, vals, dt, shared, state, ms);
-
-			bytes = std::move(model_bytes);
-			st = std::move(ms);
-
-		}
+		const bool has_model{ !state.debug.disable_device && dt.size() >= 64 && detect_device_model(state, vals, dt, shared, info, best) };
 
 		// both axis' as text, only tried when the model misses 5% or more of an axis's frames
 		const auto misses = [&](int a) {
 
-			return (st[a].escapes.size() + st[a].repeats) * 20 >= r.size();
+			return (best.st[a].escapes.size() + best.st[a].repeats) * 20 >= dt.size();
 		};
 
 		if (!has_model || misses(0) || misses(1)) {
 
-			std::array<dspace::axis_streams, 2> text_st;
+			auto text{ position_streams(all_text(), vals, dt, shared, state) };
 
-			auto text_bytes{ build_model_file(all_text(), vals, dt, shared, state, text_st) };
-
-			if (!has_model || text_bytes.size() <= bytes.size()) {
+			if (!has_model || text.size() <= best.size()) {
 
 				info = all_text();
-				st = std::move(text_st);
-				bytes = std::move(text_bytes);
+				best = std::move(text);
 
 			}
 
 		}
 
-		state.output = std::move(bytes);
+		write_orz(best, shared, state);
 
 		++state.stats.files;
 
@@ -309,7 +357,7 @@ namespace standard {
 			for (const auto& sg : info.axis[a].seg)
 				++state.stats.axis[(size_t)sg.p.mode];
 
-			state.stats.escapes += st[a].escapes.size();
+			state.stats.escapes += best.st[a].escapes.size();
 
 		}
 
@@ -346,8 +394,6 @@ namespace standard {
 		if (!dspace::read_info(stream_data[orz_tag::device_space_info], info))
 			return R.empty();
 
-		const std::vector<int> dt{ frame_time::deltas(R) };
-
 		std::vector<std::pair<u32, float>> escapes[2];
 
 		for (const u32 index : dspace::read_escape_index(_bit_view{ stream_data[orz_tag::device_escape] }))
@@ -360,7 +406,12 @@ namespace standard {
 		std::vector<i64> K[2];
 		std::vector<int> slack[2];
 
-		dspace::read_moves_rc(stream_data[orz_tag::device_moves_rc], info.axis, escapes, dt, R.size(), K, slack);
+		std::vector<int> dt;
+		std::vector<u8> repeated;
+
+		dspace::read_moves_rc(stream_data[orz_tag::device_moves_rc], info.axis, escapes, frame_time::deltas(R), K, slack, dt, repeated);
+
+		const auto sample{ repeat::sample_of(repeated) };
 
 		const bool exact_text{ (header->flags & ORZ_FLAG::text_shortest) != 0 };
 
@@ -372,7 +423,7 @@ namespace standard {
 				return false;
 
 			for (size_t i{}; i < R.size(); ++i)
-				(&R[i].x)[a] = out[i];
+				(&R[i].x)[a] = out[sample[i]];
 
 		}
 

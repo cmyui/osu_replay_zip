@@ -462,8 +462,10 @@ namespace dotnet {
 		else if (o > 0) {
 
 			const i64 q{ o - 1 };
-
-			v = orz_decimal::to_float(q % 9000000 + 1000000, (int)(q / 9000000) - 56);
+			const i64 e{ q / 9000000 - 56 };
+			
+			if (e <= 40 && e >= -60)
+				v = orz_decimal::to_float(q % 9000000 + 1000000, (int)e);
 
 		}
 

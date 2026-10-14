@@ -2,29 +2,34 @@
 
 .orz is a lossless compression format to store osu replay frames.
 
+The format is still maturing, please do NOT use this format just yet!
+There can and will be breaking changes as the initial V0 is tuned on a dataset thats over a terabyte graciously provided by cmyui (akatsuki private server)
+
 Replay set: https://drive.google.com/file/d/1i2oe929loEzhvCfRYG-DeZZQ_YouaBYD/view
 
-# osu!
-31.681% avg
+Sizes are totals over the whole set: the .osr replay data (LZMA) in, the .orz out, in bytes.
 
-226602464 -> 73102000
+# osu!
+31.806% of the original size (4,162 replays)
+
+226,602,464 -> 72,072,774
 
 # taiko
-52.790% avg
+53.091% of the original size (456 replays)
 
-2794427 -> 1483584
+2,794,427 -> 1,483,584
 
 # mania
-51.211% avg
+51.106% of the original size (1,561 replays)
 
-14573725 -> 7448010
+14,573,725 -> 7,448,010
 
 # fruit
-46.620% avg
+46.987% of the original size (373 replays)
 
-10419674 -> 4895937
+10,419,674 -> 4,895,937
 
 # Total
-34.1717174032% of the original size
+33.767% of the original size (6,552 replays)
 
-254.39029 MB -> 86.929531 MB
+254,390,290 -> 85,900,305

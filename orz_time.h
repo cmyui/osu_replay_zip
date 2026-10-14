@@ -51,6 +51,21 @@ namespace frame_time {
 
 		const int a{ R[i].keys != R[i - 1].keys }, b{ R[i - 1].keys != R[i - 2].keys };
 
+		if (i >= 3 && (u32)R[i - 1].delta <= 1 && (u32)R[i - 2].delta <= 1) {
+
+			size_t j{ i - 1 };
+			u64 run{}, prev_run{};
+
+			for (; j > 0 && R[j].delta == 0 && run < 7; --j)
+				++run;
+
+			if (j > 0 && R[j].delta != 0)
+				for (--j; j > 0 && R[j].delta == 0 && prev_run < 7; --j)
+					++prev_run;
+
+			return 300 + ((u64)a * 8 + run) * 8 + prev_run;
+		}
+
 		return ((u64)(a * 2 + b) * 25 + grid_bin(now)) * 3 + rate;
 	}
 
