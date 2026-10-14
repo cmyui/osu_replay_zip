@@ -726,6 +726,57 @@ namespace autopilot {
 
 		}
 
+		// frames between the stops a setting makes exact, taking the better of straight and eased per pair
+		const auto hits = [&](const _params& p) {
+
+			const _screen screen{ p };
+
+			size_t total{};
+
+			for (const auto& [a, b] : pairs) {
+
+				size_t most{};
+
+				for (const kind type : { kind::line, kind::ease }) {
+
+					path tr{};
+
+					tr.k.push_back({ s[a].t, { s[a].v[0], s[a].v[1] } });
+					tr.add({ type, 0, s[b].t - s[a].t, { s[a].v[0], s[a].v[1] }, { s[b].v[0], s[b].v[1] } }, s[a].t, true, p.sample_ms());
+
+					size_t n{};
+
+					for (size_t j{ a + 1 }; j < b; ++j) {
+
+						float v[2];
+
+						tr.predict(s[j].t, v);
+
+						n += lands(screen, v, s[j]);
+
+					}
+
+					most = std::max(most, n);
+
+				}
+
+				total += most;
+
+			}
+
+			return total;
+		};
+
+		// a played cursor makes few exact moves at the most common window too: the others are only tried past half of
+		// MIN_HITS there
+		size_t first{};
+
+		for (u32 rate{}; rate < RATE_COUNT; ++rate)
+			first = std::max(first, hits({ true, rate, windows[0].first, windows[0].second }));
+
+		if (first * 2 < MIN_HITS)
+			return {};
+
 		_params best{};
 		size_t best_hits{};
 
@@ -734,44 +785,10 @@ namespace autopilot {
 			for (size_t w{}; w < window_count; ++w) {
 
 				const _params p{ true, rate, windows[w].first, windows[w].second };
-				const _screen screen{ p };
 
-				size_t hits{};
+				if (const size_t h{ hits(p) }; h > best_hits) {
 
-				for (const auto& [a, b] : pairs) {
-
-					size_t most{};
-
-					for (const kind type : { kind::line, kind::ease }) {
-
-						path tr{};
-
-						tr.k.push_back({ s[a].t, { s[a].v[0], s[a].v[1] } });
-						tr.add({ type, 0, s[b].t - s[a].t, { s[a].v[0], s[a].v[1] }, { s[b].v[0], s[b].v[1] } }, s[a].t, true, p.sample_ms());
-
-						size_t n{};
-
-						for (size_t j{ a + 1 }; j < b; ++j) {
-
-							float v[2];
-
-							tr.predict(s[j].t, v);
-
-							n += lands(screen, v, s[j]);
-
-						}
-
-						most = std::max(most, n);
-
-					}
-
-					hits += most;
-
-				}
-
-				if (hits > best_hits) {
-
-					best_hits = hits;
+					best_hits = h;
 					best = p;
 
 				}
