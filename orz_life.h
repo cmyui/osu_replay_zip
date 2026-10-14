@@ -42,23 +42,11 @@ namespace life {
 		return out;
 	}
 
-	// explicitly clamps life values between 0. to 1
-	// technically produces different results on invalid data but for all effective cases this is parity
-	inline bool parse(const std::string& text, std::vector<point>& pts, std::string& clamped) {
+	// false for anything out of range or not a "time|life," list, which stays text
+	inline bool parse(const std::string& text, std::vector<point>& pts) {
 
 		pts.clear();
 		pts.reserve(text.size() / 6);
-
-		clamped.clear();
-		clamped.reserve(text.size());
-
-		const auto fail = [&]() {
-
-			pts.clear();
-			clamped.clear();
-
-			return false;
-		};
 
 		size_t i{};
 
@@ -68,35 +56,21 @@ namespace life {
 			const size_t comma{ text.find(',', i) };
 
 			if (pipe == std::string::npos || (comma != std::string::npos && comma < pipe))
-				return fail();
+				return false;
 
 			const size_t end{ comma == std::string::npos ? text.size() : comma };
 
 			point p{};
 
 			if (std::from_chars(text.data() + i, text.data() + pipe, p.time).ptr != text.data() + pipe)
-				return fail();
+				return false;
 
 			double v{};
 
-			if (std::from_chars(text.data() + pipe + 1, text.data() + end, v).ptr != text.data() + end)
-				return fail();
-
-			const bool out_of_range{ v < 0.0 || v > 1.0 };
-
-			v = std::clamp(v, 0.0, 1.0);
+			if (std::from_chars(text.data() + pipe + 1, text.data() + end, v).ptr != text.data() + end || !(v >= 0.0 && v <= 1.0))
+				return false;
 
 			p.hundredths = (int)std::lround(v * 100.0);
-
-			clamped.append(text, i, pipe + 1 - i);
-
-			if (out_of_range)
-				dotnet::append_hundredths(clamped, p.hundredths);
-			else
-				clamped.append(text, pipe + 1, end - pipe - 1);
-
-			if (end < text.size())
-				clamped += ',';
 
 			pts.push_back(p);
 
@@ -265,15 +239,14 @@ namespace life {
 	inline std::vector<u8> encode(const std::string& text, std::span<const _osr_frame> frames) {
 
 		std::vector<point> pts;
-		std::string clamped;
 
-		if (parse(text, pts, clamped) && pts.size() <= MAX_POINTS) {
+		if (parse(text, pts) && pts.size() <= MAX_POINTS) {
 
 			const auto times{ frame_times(frames) };
 			const auto coded{ encode_compact(pts, times) };
 
 			// empty/small graphs are smaller as text
-			if (coded.size() < text.size() && to_text(decode_compact(coded, times)) == clamped) {
+			if (coded.size() < text.size() && to_text(decode_compact(coded, times)) == text) {
 
 				std::vector<u8> out{ format_compact };
 
