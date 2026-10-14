@@ -80,8 +80,6 @@ namespace standard {
 		sh.table = frame_time::build_table(sh.delta);
 		sh.grid = frame_time::pick_grid(sh.delta);
 
-		frame_time::write_table(sh.time, sh.table, sh.grid);
-
 		sh.repeated = repeat::flags(r);
 		sh.sample = repeat::sample_of(sh.repeated);
 
@@ -117,60 +115,35 @@ namespace standard {
 		for (int a{}; a < 2; ++a)
 			p.st[a] = dspace::encode_axis_model(m.axis[a], vals[a], dt, state.exact_text);
 
-		{
+		// std_frames: delta table and device model, from the next byte the context mixed frames and escape values
+		bit_stream head{};
 
-			const auto packed{ dspace::write_info(m) };
+		frame_time::write_table(head, shared.table, shared.grid);
+		dspace::write_info(m, head);
 
-			p.streams.add_stream(orz_tag::device_space_info, packed.data(), packed.size());
+		frames::_frame_data fd{ shared.delta, shared.keys, shared.repeated };
 
-		}
+		std::vector<std::pair<float, float>> values[2];
 
-		{
+		for (int a{}; a < 2; ++a) {
 
-			frames::_frame_data fd{ shared.delta, shared.keys, shared.repeated };
+			fd.K[a] = p.st[a].K;
+			fd.slack[a] = p.st[a].slack;
 
-			std::vector<u32> esc[2];
+			for (size_t j{}; j < p.st[a].escapes.size(); ++j) {
 
-			for (int a{}; a < 2; ++a) {
-
-				fd.K[a] = p.st[a].K;
-				fd.slack[a] = p.st[a].slack;
-
-				for (const auto& [f, v] : p.st[a].escapes)
-					esc[a].push_back(f);
+				fd.escaped[a].push_back(p.st[a].escapes[j].first);
+				values[a].push_back({ p.st[a].escapes[j].second, p.st[a].escape_pred[j] });
 
 			}
 
-			const frames::_side side{ m.axis, { &esc[0], &esc[1] }, shared.table, frame_time::_time_grid{ shared.grid }, shared.relax };
-
-			const auto bytes{ frames::encode(fd, side, shared.delta.size()) };
-
-			p.streams.add_stream(orz_tag::std_frames, bytes.data(), bytes.size());
-
 		}
 
-		std::vector<u32> index;
+		const frames::_side side{ m.axis, shared.table, frame_time::_time_grid{ shared.grid }, shared.relax };
 
-		for (int a{}; a < 2; ++a)
-			for (const auto& [f, v] : p.st[a].escapes)
-				index.push_back(f * 2 + a);
+		add_to_u8(head.data, frames::encode(fd, side, shared.delta.size(), values, state.exact_text));
 
-		std::sort(index.begin(), index.end());
-
-		if (index.size()) {
-
-			bit_stream e{}, values{};
-
-			dspace::write_escape_index(index, e);
-
-			for (int a{}; a < 2; ++a)
-				for (size_t j{}; j < p.st[a].escapes.size(); ++j)
-					dspace::write_escape_value(p.st[a].escapes[j].second, p.st[a].escape_pred[j], values, state.exact_text);
-
-			p.streams.add_compress_stream(orz_tag::device_escape, e, comp::pos_delta_prop());
-			p.streams.add_compress_stream(orz_tag::device_escape_values, values, comp::pos_delta_prop());
-
-		}
+		p.streams.add_stream(orz_tag::std_frames, head.data.data(), head.data.size());
 
 		return p;
 	}
@@ -383,36 +356,40 @@ namespace standard {
 
 	}
 	
+	// the head of std_frames: delta table, time grid and device model; rest: what follows from the next byte
+	inline bool read_head(std::span<const u8> data, std::vector<int>& table, u32& grid, dspace::_model_info& info,
+		std::span<const u8>& rest) {
+
+		const _bit_view head{ data };
+
+		size_t bit{};
+
+		table = frame_time::read_table(head, bit, grid);
+
+		if (!dspace::read_info(head, bit, info))
+			return false;
+
+		rest = data.subspan(std::min(data.size(), (bit + 7) / 8));
+
+		return true;
+	}
+
 	bool decode(const _orz_header* header, const _stream_map& stream_data, std::vector<_osr_frame>& R) {
 
-		u32 grid{};
-
-		const auto table{ frame_time::read_table(stream_data, grid) };
-
+		frames::_side side{};
 		dspace::_model_info info{};
+		u32 grid{};
+		std::span<const u8> rest;
 
-		if (!dspace::read_info(stream_data[orz_tag::device_space_info], info))
+		if (!read_head(stream_data[orz_tag::std_frames], side.table, grid, info, rest))
 			return R.empty();
 
-		std::vector<std::pair<u32, float>> escapes[2];
-		std::vector<u32> escaped[2];
-
-		for (const u32 index : dspace::read_escape_index(_bit_view{ stream_data[orz_tag::device_escape] })) {
-
-			escapes[index % 2].push_back({ index / 2, 0.f });
-			escaped[index % 2].push_back(index / 2);
-
-		}
-
-		const _bit_view escape_values{ stream_data[orz_tag::device_escape_values] };
-
-		size_t escape_cursor{};
+		side.axis = info.axis;
+		side.grid = frame_time::_time_grid{ grid };
+		side.relax = (header->flags & ORZ_FLAG::relax) != 0;
 
 		frames::_frame_data fd{};
-
-		const frames::_side side{ info.axis, { &escaped[0], &escaped[1] }, table, frame_time::_time_grid{ grid }, (header->flags & ORZ_FLAG::relax) != 0 };
-
-		frames::decode(stream_data[orz_tag::std_frames], fd, side, R.size());
+		frames::_reader reader{ rest, fd, side, R.size() };
 
 		const auto sample{ repeat::sample_of(fd.repeated) };
 
@@ -422,7 +399,9 @@ namespace standard {
 
 		for (int a{}; a < 2; ++a) {
 
-			if (!dspace::decode_axis(info.axis[a], fd.K[a], fd.slack[a], escapes[a], fd.dt, exact_text, out, &escape_values, &escape_cursor))
+			const auto escape_value = [&](float pred) { return reader.escape(pred, a, exact_text); };
+
+			if (!dspace::decode_axis(info.axis[a], fd.K[a], fd.slack[a], fd.escaped[a], fd.dt, exact_text, out, escape_value))
 				return false;
 
 			for (size_t i{}; i < R.size(); ++i)

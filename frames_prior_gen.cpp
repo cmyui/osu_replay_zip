@@ -1,5 +1,6 @@
 // Generates frames_prior.h: trains the orz_frames.h models over a list of replays and writes the counters seen often
-// enough (relax and other replays apart). Not part of the orz build; compile it with the same headers and the LZMA SDK.
+// enough. Only replays that start from the priors (frames::uses_priors) train them. Not part of the orz build; compile
+// it with the same headers and the LZMA SDK.
 //
 // usage: frames_prior_gen list.txt [entries] > frames_prior.h
 //   list.txt holds one .osr path per line; entries caps the table size (most used contexts first)
@@ -27,15 +28,13 @@ int main(int argc, char** argv) {
 
 	const size_t budget{ argc > 2 ? (size_t)atoll(argv[2]) : 16384 };
 
-	// [0] other replays, [1] relax
-	frames::_models trained[2];
+	frames::_models trained{};
 
-	for (auto& m : trained)
-		m.init(size_t(1) << 20, true);
+	trained.init(size_t(1) << 20, true);
 
 	std::ifstream list(argv[1]);
 	std::string path;
-	size_t files[2]{};
+	size_t files{};
 
 	while (std::getline(list, path)) {
 
@@ -51,70 +50,53 @@ int main(int argc, char** argv) {
 		if (state.output.empty() || !orz_decode_frames(state.output, decoded))
 			continue;
 
-		const auto& streams{ decoded.streams };
-
-		if (streams[orz_tag::std_frames].empty())
-			continue;
-
-		u32 grid{};
-
-		const auto table{ frame_time::read_table(streams, grid) };
-
+		frames::_side side{};
 		dspace::_model_info info{};
+		u32 grid{};
+		std::span<const u8> rest;
 
-		if (!dspace::read_info(streams[orz_tag::device_space_info], info))
+		if (!standard::read_head(decoded.streams[orz_tag::std_frames], side.table, grid, info, rest))
 			continue;
 
-		std::vector<u32> escaped[2];
+		side.axis = info.axis;
+		side.grid = frame_time::_time_grid{ grid };
+		side.relax = (decoded.flags & ORZ_FLAG::relax) != 0;
 
-		for (const u32 index : dspace::read_escape_index(_bit_view{ streams[orz_tag::device_escape] }))
-			escaped[index % 2].push_back(index / 2);
+		if (!frames::uses_priors(side))
+			continue;
 
-		const bool relax{ (decoded.flags & ORZ_FLAG::relax) != 0 };
-
-		const frames::_side side{ info.axis, { &escaped[0], &escaped[1] }, table, frame_time::_time_grid{ grid }, relax };
+		const size_t n{ read_container(state.output).header.frame_count };
 
 		frames::_frame_data fd{};
-
-		const size_t n{ decoded.frames.size() - (streams[orz_tag::seed].size() == 4) };
-
-		frames::decode(streams[orz_tag::std_frames], fd, side, n);
+		frames::_reader reader{ rest, fd, side, n };
 
 		cm::bit_trainer t{};
 
-		frames::frame_loop(t, trained[relax], fd, side, n, true);
+		frames::frame_loop(t, trained, fd, side, n, true);
 
-		++files[relax];
+		++files;
 
 	}
 
-	fprintf(stderr, "trained on %zu other / %zu relax replays\n", files[0], files[1]);
+	fprintf(stderr, "trained on %zu replays\n", files);
 
-	// every trained line with its use count, most used first, until the budget is spent;
-	// relax times start flat (orz_frames.h seed_priors), so their lines are left out
+	// every trained line with its use count, most used first, until the budget is spent
 	struct _line {
-		u32 uses, variant, model;
+		u32 uses, model;
 		size_t index;
 	};
 
 	std::vector<_line> lines;
 
-	for (u32 v{}; v < 2; ++v) {
+	const auto models{ trained.all() };
 
-		const auto models{ trained[v].all() };
+	for (u32 m{}; m < FRAMES_PRIOR_MODELS; ++m) {
 
-		for (u32 m{}; m < FRAMES_PRIOR_MODELS; ++m) {
+		const auto& table{ models[m]->table };
 
-			if (v == 1 && models[m] == &trained[v].time)
-				continue;
-
-			const auto& table{ models[m]->table };
-
-			for (size_t i{}; i < table.uses.size(); ++i)
-				if (table.uses[i])
-					lines.push_back({ table.uses[i], v, m, i });
-
-		}
+		for (size_t i{}; i < table.uses.size(); ++i)
+			if (table.uses[i])
+				lines.push_back({ table.uses[i], m, i });
 
 	}
 
@@ -123,7 +105,7 @@ int main(int argc, char** argv) {
 	// counters seen at least this often are worth a prior
 	constexpr u32 MIN_COUNT{ 16 };
 
-	std::vector<std::pair<u64, u32>> entries[2][FRAMES_PRIOR_MODELS];
+	std::vector<std::pair<u64, u32>> entries[FRAMES_PRIOR_MODELS];
 	size_t total{};
 
 	for (const auto& l : lines) {
@@ -131,7 +113,7 @@ int main(int argc, char** argv) {
 		if (total >= budget)
 			break;
 
-		const auto& table{ trained[l.variant].all()[l.model]->table };
+		const auto& table{ models[l.model]->table };
 
 		for (u32 slot{}; slot < table.width; ++slot) {
 
@@ -140,7 +122,7 @@ int main(int argc, char** argv) {
 			if (c.n < MIN_COUNT)
 				continue;
 
-			entries[l.variant][l.model].push_back({ table.keys[l.index], c.p | (u32)c.n << 16 | slot << 24 });
+			entries[l.model].push_back({ table.keys[l.index], c.p | (u32)c.n << 16 | slot << 24 });
 			++total;
 
 		}
@@ -149,44 +131,32 @@ int main(int argc, char** argv) {
 
 	std::vector<u64> keys;
 	std::vector<u32> values;
-	u32 start[2][FRAMES_PRIOR_MODELS + 1]{};
+	u32 start[FRAMES_PRIOR_MODELS + 1]{};
 
-	for (u32 v{}; v < 2; ++v) {
+	for (u32 m{}; m < FRAMES_PRIOR_MODELS; ++m) {
 
-		for (u32 m{}; m < FRAMES_PRIOR_MODELS; ++m) {
+		start[m] = (u32)keys.size();
 
-			start[v][m] = (u32)keys.size();
+		for (const auto& [k, value] : entries[m]) {
 
-			for (const auto& [k, value] : entries[v][m]) {
-
-				keys.push_back(k);
-				values.push_back(value);
-
-			}
+			keys.push_back(k);
+			values.push_back(value);
 
 		}
 
-		start[v][FRAMES_PRIOR_MODELS] = (u32)keys.size();
-
 	}
+
+	start[FRAMES_PRIOR_MODELS] = (u32)keys.size();
 
 	printf("#pragma once\n\n#include <cstdint>\n\n");
 	printf("// generated by frames_prior_gen.cpp: counter priors for orz_frames.h, keyed by the full context hash\n");
-	printf("// models: keys_changed, keys_bits, keys_high, time, repeat, move, move_bits, slack; [0] other replays, [1] relax\n\n");
+	printf("// models: keys_changed, keys_bits, keys_high, time, repeat, move, move_bits, slack, escape\n\n");
 	printf("constexpr uint32_t FRAMES_PRIOR_MODELS{ %u };\n", FRAMES_PRIOR_MODELS);
 	printf("constexpr uint32_t FRAMES_PRIOR_CONFIDENCE{ %u };\n\n", FRAMES_PRIOR_CONFIDENCE);
-	printf("constexpr uint32_t FRAMES_PRIOR_START[2][FRAMES_PRIOR_MODELS + 1]{\n");
+	printf("constexpr uint32_t FRAMES_PRIOR_START[FRAMES_PRIOR_MODELS + 1]{");
 
-	for (int v{}; v < 2; ++v) {
-
-		printf("\t{");
-
-		for (u32 m{}; m <= FRAMES_PRIOR_MODELS; ++m)
-			printf(" %u%s", start[v][m], m < FRAMES_PRIOR_MODELS ? "," : " ");
-
-		printf("},\n");
-
-	}
+	for (u32 m{}; m <= FRAMES_PRIOR_MODELS; ++m)
+		printf(" %u%s", start[m], m < FRAMES_PRIOR_MODELS ? "," : " ");
 
 	printf("};\n\nconstexpr uint64_t FRAMES_PRIOR_KEYS[%zu]{", std::max<size_t>(keys.size(), 1));
 

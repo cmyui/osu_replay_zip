@@ -1,8 +1,9 @@
 #pragma once
 
 // osu!standard frames as one interleaved stream. Per frame: keys, time delta, position repeat flag and, for a new
-// position, both cursor moves (residuals of the move predictor) plus any mouse slack. Every value is a sequence of
-// binary decisions coded with context mixing (cm.h), and one templated loop serves encoder, decoder and prior training.
+// position, both cursor moves (residuals of the move predictor) plus any escape flag and mouse slack; the escape values
+// follow the frames. Every value is a sequence of binary decisions coded with context mixing (cm.h), and one templated
+// loop serves encoder, decoder and prior training.
 
 #include "cm.h"
 #include "frames_prior.h"
@@ -15,20 +16,16 @@
 
 namespace frames {
 
-	// most common time deltas of non relax replays first; those code a delta as its place here (escape past the end)
-	constexpr int GLOBAL_DELTAS[]{
-		17, 16, 18, 15, 14, 13, 25, 4, 3, 6, 5, 8, 9, 7, 12, 10, 2, 11, 1, 19, 0, 24, 26, 20, 23, 21, 22, 27, 28, 29, 31, 30,
-		33, 32, 34, 40, 35, -1, 36, 37, 39, 38, 41, 42, 67, 66, 50, 43, 44, 45, 49, 46, 48, 82, 47, 51, 81, 52, 53, 55, 54, 56
-	};
-	constexpr u32 GLOBAL_DELTA_COUNT{ (u32)(sizeof(GLOBAL_DELTAS) / sizeof(int)) };
-
-	// relax replays code a delta as its place in their own table, the unary covers this many entries
-	constexpr u32 RELAX_LISTED{ 64 };
+	// a delta is coded as its place in the replay's own table (most used first), the unary covers this many entries
+	constexpr u32 LISTED{ 64 };
 
 	constexpr int KEY_BITS{ 5 }; // M1 M2 K1 K2 smoke (folded like the key stream), higher bits are escaped
 
 	// valid moves are far below 2^40 and K far below 2^50, only damaged files reach these
 	constexpr i64 MAX_MOVE{ 1ll << 40 }, MAX_K{ 1ll << 50 };
+
+	// move residual decisions: 0 zero, 1-3 sign, 4-15 length up, 16 length gate, 17-26 length down, 32-47 long lengths
+	constexpr u32 MOVE_STEPS{ 48 };
 
 	struct _frame_data {
 		std::vector<int> delta;
@@ -36,24 +33,24 @@ namespace frames {
 		std::vector<u8> repeated;
 		std::vector<i64> K[2];           // per new position
 		std::vector<int> slack[2];       // per axis, in coding order
+		std::vector<u32> escaped[2];     // per axis, positions the device model escapes, ascending
 		std::vector<int> dt;             // per new position, ms since the previous one
 	};
 
 	struct _side {
 		const dspace::axis_model* axis{};
-		const std::vector<u32>* escapes[2]{}; // escaped positions per axis, ascending
-		std::vector<int> table;               // relax: the replay's delta table
+		std::vector<int> table;          // the replay's delta table
 		frame_time::_time_grid grid{ 0 };
 		bool relax{};
 	};
 
 	struct _models {
 
-		cm::model keys_changed, keys_bits, keys_high, time, repeat, move, move_bits, slack;
+		cm::model keys_changed, keys_bits, keys_high, time, repeat, move, move_bits, slack, escape, escape_value;
 
 		// in frames_prior.h order
 		std::array<cm::model*, FRAMES_PRIOR_MODELS> all() {
-			return { &keys_changed, &keys_bits, &keys_high, &time, &repeat, &move, &move_bits, &slack };
+			return { &keys_changed, &keys_bits, &keys_high, &time, &repeat, &move, &move_bits, &slack, &escape };
 		}
 
 		// tables follow the replay's length up to a cap (the frame count of a file to decode is untrusted),
@@ -67,20 +64,12 @@ namespace frames {
 			keys_bits.init(6, std::clamp(b + 2, 14, 20 + extra), 1, 64, 64, record_keys);
 			keys_high.init(1, 8, 1, 1, 1, record_keys);
 			repeat.init(7, std::clamp(b + 4, 16, 22 + extra), 1, 64, 64, record_keys);
-			time.init(7, std::clamp(b, 12, 16 + extra), 64, 64 * 3, 64 * 3, record_keys);
-
-			init_moves(frames, 8, record_keys);
-
-		}
-
-		// move_inputs below 8 gives a cheaper move model (device model selection estimates)
-		void init_moves(size_t positions, int move_inputs, bool record_keys = false) {
-
-			const int b{ (int)std::bit_width(positions) }, extra{ record_keys ? 4 : 0 };
-
-			move.init(move_inputs, std::clamp(b + 3, 12, 19 + extra), 16, 32 * 4, 32 * 32, record_keys);
-			move_bits.init(4, std::clamp(b + 2, 12, 20 + extra), 1, 8 * 4, 8 * 32, record_keys);
-			slack.init(3, std::clamp(b - 2, 10, 16), 16, 64, 64, record_keys);
+			time.init(6, std::clamp(b, 12, 16 + extra), 64, 64 * 3, 64 * 3, record_keys);
+			move.init(6, std::clamp(b + 3, 12, 19 + extra), 32, MOVE_STEPS * 4, MOVE_STEPS * 32, record_keys);
+			move_bits.init(2, std::clamp(b + 2, 12, 20 + extra), 1, 8 * 4, 8 * 32, record_keys);
+			slack.init(1, std::clamp(b - 2, 10, 16), 16, 64, 64, record_keys);
+			escape.init(5, std::clamp(b + 2, 12, 20 + extra), 1, 16 * 3, 16 * 3, record_keys);
+			escape_value.init(2, 10, 64, 1, 1);
 
 		}
 
@@ -186,16 +175,15 @@ namespace frames {
 		return f;
 	}
 
-	// move residual: zero, sign, bit length in unary, two modelled bits below the leading one, then raw bits
+	// move residual: zero, sign, bit length (unary from about the usual length), two modelled bits below the leading one,
+	// then raw bits
 	template<typename Coder>
 	i64 move_residual(Coder& c, _models& M, i64 r, const _move_features& f) {
 
-		const u64 ctx[8]{
-			(u64)f.scale * 4 + f.regime,
+		const u64 ctx[6]{
 			(((u64)f.bkp * 3 + f.regime) * 2 + f.order) * 5 + f.mode,
 			(((((((u64)f.mode * 64 + f.bkp) * 2 + f.axis) * 3 + f.first_miss) * 3 + f.prev_miss) * 3 + f.sign) * 3 + f.run) * 32 + f.scale,
 			(((u64)f.scale * 20 + std::min(f.first_res, 19)) * 2 + f.order) * 3 + f.regime,
-			((u64)(f.prev_res + 40) * 32 + f.scale) * 3 + f.regime,
 			((u64)std::min(f.dt, 40) * 32 + f.bkp) * 2 + f.order,
 			(((u64)f.since_move * 16 + f.gap) * 8 + std::min(f.bkp, 7)) * 3 + f.regime,
 			((u64)f.since_move * 16 + f.gap) * 41 + (u64)(f.prev_res + 20),
@@ -203,12 +191,12 @@ namespace frames {
 
 		const size_t apc{ (size_t)std::min(f.scale, 31) };
 
-		// slots: 0 zero, 1-3 sign (by the prediction's sign), 4-15 bit length steps, then a second line for longer ones
+		// steps as MOVE_STEPS, the long lengths in a second line
 		M.move.bind(ctx);
 
 		const auto decide = [&](int y, u32 step) {
 
-			const u32 slot{ step & 15 };
+			const u32 slot{ step < 32 ? step : step & 15 };
 
 			return M.move.code(c, y, slot, (size_t)step * 4 + (size_t)f.regime, (size_t)step * 32 + apc);
 		};
@@ -221,19 +209,37 @@ namespace frames {
 		const u64 v{ r < 0 ? 0 - u64(r) : u64(r) };
 		const int len{ v ? 63 - std::countl_zero(v) : 0 };
 
+		// the length starts from about the bit length of the running mean residual: up as plain unary, down on its own steps
+		const int start{ std::clamp(f.scale - 4, 0, 11) };
+
 		int n{};
 
-		while (n < 12 && decide(len > n, 4 + (u32)n))
-			++n;
+		if (start == 0 || decide(len >= start, 16)) {
+
+			n = start;
+
+			while (n < 12 && decide(len > n, 4 + (u32)n))
+				++n;
+
+		} else {
+
+			n = start - 1;
+
+			while (n > 0 && !decide(len >= n, 16 + (u32)n))
+				--n;
+
+		}
 
 		if (n == 12) {
 
 			M.move.bind(ctx, 1);
 
-			while (n < 62 && decide(len > n, 16 + (u32)std::min(n - 12, 15)))
+			while (n < 62 && decide(len > n, 32 + (u32)std::min(n - 12, 15)))
 				++n;
 
 		}
+
+		const u64 scale_ctx{ (u64)f.scale * 4 + f.regime };
 
 		u64 out{ 1 };
 
@@ -244,7 +250,7 @@ namespace frames {
 			if (k < 2) {
 
 				const u64 id{ (u64)k * 4 + (out & ((u64(1) << k) - 1)) };
-				const u64 cx[4]{ ((u64)n * 16 + id) * 64, ((ctx[1] * 64 + (u64)n) * 64 + id) * 2, ((ctx[0] * 64 + (u64)n) * 64 + id) * 2 + 1, (u64)n * 64 + id + 7 };
+				const u64 cx[2]{ ((ctx[0] * 64 + (u64)n) * 64 + id) * 2, ((scale_ctx * 64 + (u64)n) * 64 + id) * 2 + 1 };
 
 				out = (out << 1) | (u64)M.move_bits.code(c, bit, cx, (size_t)id * 4 + (size_t)f.regime, (size_t)id * 32 + (size_t)std::min(n, 31));
 
@@ -261,7 +267,7 @@ namespace frames {
 	int slack_value(Coder& c, cm::model& m, int s, int axis, i64 d) {
 
 		const u64 z{ rc::zz(s) };
-		const u64 ctx[3]{ (u64)axis * 64 + (u64)bit_length(d), (u64)axis, 0 };
+		const u64 ctx[1]{ (u64)axis * 64 + (u64)bit_length(d) };
 
 		m.bind(ctx);
 
@@ -281,6 +287,41 @@ namespace frames {
 		return (int)rc::unzz(v);
 	}
 
+	// an escaped position's value against decode_axis's prediction: the distance in 7 digit mantissas (in ulps for
+	// shortest round-trip text) when near, else the raw float. prev_len: per axis, the last distance's bit length.
+	template<typename Coder>
+	float escape_value(Coder& c, cm::model& m, float x, float pred, int a, bool exact_text, int& prev_len, bool encoding) {
+
+		i64 diff{};
+
+		const bool near{ encoding && (exact_text ? dspace::escape_ulps(x, pred, diff) : dspace::escape_digits(x, pred, diff)) };
+		const u64 kind{ (u64)a * 2 + exact_text };
+		const u64 ctx[2]{ kind, kind * 64 + (u64)prev_len };
+
+		m.bind(ctx);
+
+		if (!std::isfinite(pred) || !m.code(c, near, 0u, 0, 0)) {
+
+			prev_len = 63;
+
+			return float_from_bits((u32)raw(c, std::bit_cast<u32>(x), 32));
+		}
+
+		const u64 v{ rc::zz(diff) + 1 };
+		const int len{ 63 - std::countl_zero(v) };
+
+		int n{};
+
+		while (n < 33 && m.code(c, len > n, 1 + (u32)n, 0, 0))
+			++n;
+
+		prev_len = n;
+
+		const i64 d{ std::clamp<i64>(rc::unzz(((u64(1) << n) | raw(c, v, n)) - 1), -(1ll << 31), 1ll << 31) };
+
+		return exact_text ? float_from_bits(u32((i64)std::bit_cast<u32>(pred) + d)) : dspace::escape_from_digits(pred, d);
+	}
+
 	// encoding reads fd, decoding (encoding false) fills it; side must match on both ends
 	template<typename Coder>
 	void frame_loop(Coder& c, _models& M, _frame_data& fd, const _side& side, size_t frames, bool encoding) {
@@ -295,6 +336,7 @@ namespace frames {
 
 				fd.K[a].clear();
 				fd.slack[a].clear();
+				fd.escaped[a].clear();
 
 			}
 
@@ -313,7 +355,7 @@ namespace frames {
 			v = -100000;
 
 		// time
-		int zero_run{}, prev_zero_run{}, one_run{}, since_new{};
+		int zero_run{}, prev_zero_run{}, one_run{};
 
 		// repeat flag
 		int repeat_run{};
@@ -324,6 +366,14 @@ namespace frames {
 		_axis_history history[2]{};
 		size_t i{}, escape_at[2]{}, slack_at[2]{};
 		i64 elapsed{}, first_res{};
+
+		// escapes: whether an axis has any, positions since its last, how many so far
+		bool escapes[2]{}, first_escaped{};
+		int since_escape[2]{ 64, 64 };
+		i64 escape_count[2]{};
+
+		for (int a{}; a < 2; ++a)
+			escapes[a] = c.code(encoding ? (int)!fd.escaped[a].empty() : 0, 32768) != 0;
 
 		for (size_t f{}; f < frames; ++f) {
 
@@ -442,62 +492,38 @@ namespace frames {
 					span += std::max(0, fd.delta[j - 1]);
 
 				const u64 rate{ (u64)std::min<i64>(span * 4 / std::max(count, 1), 127) };
-				const u64 ctx[7]{
+				const u64 ctx[6]{
 					(d1 * 64 + d2) * 3 + kc,
 					((d1 * 64 + d2) * 64 + d3) * 64 + d4,
 					(((u64)std::min(zero_run, 15) * 16 + (u64)std::min(prev_zero_run, 15)) * 16 + (u64)std::min(one_run, 15)) * 3 + kc,
 					(((u64)side.grid.bin(now) * 64 + d1) * 3 + kc) * 2 + kc1,
 					((d1 * 3 + r1) * 3 + r2) * 3 + r3,
 					(rate * 64 + d1) * 3 + kc,
-					((u64)std::min(since_new, 31) * 64 + d1) * 3 + r1,
 				};
 
 				const size_t regime{ d1 <= 5 ? 0u : d1 <= 13 ? 1u : 2u };
 
 				M.time.bind(ctx);
 
-				// unary over a list of deltas, one decision per entry
-				const auto place = [&](u32 entries, u32 want, bool last_implied) {
+				// unary over the first LISTED table entries, a counter per delta value; later ones (rare) as an escaped index
+				const u32 n{ (u32)side.table.size() }, listed{ std::min(n, LISTED) };
+				const u32 want{ encoding ? (u32)(std::find(side.table.begin(), side.table.end(), fd.delta[f]) - side.table.begin()) : 0u };
 
-					u32 at{};
+				u32 at{};
 
-					for (; at < entries && !(last_implied && at + 1 == entries); ++at) {
+				for (; at < listed && !(listed == n && at + 1 == listed); ++at) {
 
-						const size_t set{ (size_t)std::min<u32>(at, 63) * 3 + regime };
+					const size_t set{ (size_t)std::min<u32>(at, 63) * 3 + regime };
 
-						if (M.time.code(c, want == at, std::min<u32>(at, 63), set, set))
-							break;
-
-					}
-
-					return at;
-				};
-
-				int d{};
-
-				if (side.relax) {
-
-					// the first RELAX_LISTED entries in unary, later ones (rare) as an escaped index
-					const u32 n{ (u32)side.table.size() }, listed{ std::min(n, RELAX_LISTED) };
-					const u32 want{ encoding ? (u32)(std::find(side.table.begin(), side.table.end(), fd.delta[f]) - side.table.begin()) : 0u };
-
-					u32 at{ place(listed, want, listed == n) };
-
-					if (at == listed && listed < n)
-						at = listed + (u32)(gamma(c, encoding ? want - listed + 1 : 0) - 1);
-
-					d = n ? side.table[std::min(at, n - 1)] : 0;
-
-				} else {
-
-					const u32 want{ encoding ? (u32)(std::find(GLOBAL_DELTAS, GLOBAL_DELTAS + GLOBAL_DELTA_COUNT, fd.delta[f]) - GLOBAL_DELTAS) : 0u };
-					const u32 at{ place(GLOBAL_DELTA_COUNT, want, false) };
-
-					d = at < GLOBAL_DELTA_COUNT ? GLOBAL_DELTAS[at] : (int)rc::unzz(gamma(c, encoding ? rc::zz(fd.delta[f]) + 1 : 0) - 1);
+					if (M.time.code(c, want == at, (u32)std::clamp(side.table[at], -2, 61) + 2, set, set))
+						break;
 
 				}
 
-				fd.delta[f] = d;
+				if (at == listed && listed < n)
+					at = listed + (u32)(gamma(c, encoding ? want - listed + 1 : 0) - 1);
+
+				fd.delta[f] = n ? side.table[std::min(at, n - 1)] : 0;
 
 			}
 
@@ -602,11 +628,43 @@ namespace frames {
 
 					mp.push(a, d, pr);
 
-					const auto& esc{ *side.escapes[a] };
-					const bool escaped{ escape_at[a] < esc.size() && esc[escape_at[a]] == i };
+					bool escaped{};
 
-					if (escaped)
-						++escape_at[a];
+					if (escapes[a]) {
+
+						const auto& esc{ fd.escaped[a] };
+						const bool want{ encoding && escape_at[a] < esc.size() && esc[escape_at[a]] == i };
+						const u64 since{ (u64)std::min(since_escape[a], 63) }, sb{ log_bucket(since_escape[a]) };
+						const u64 other{ q ? (u64)first_escaped : 2 };
+						const u64 ectx[5]{
+							since * 2 + (u64)a,
+							((u64)std::min(bit_length(d), 40) * 5 + (u64)params.mode) * 2 + (u64)a,
+							sb * 32 + (u64)std::min(bit_length(res), 31),
+							other * 64 + since,
+							log_bucket(escape_count[a] * 4096 / (i64)(i + 1)) * 32 + sb,
+						};
+
+						const size_t set{ (size_t)std::min<u64>(sb, 15) * 3 + (size_t)other };
+
+						escaped = M.escape.code(c, want, ectx, set, set) != 0;
+
+						if (escaped) {
+
+							if (encoding)
+								++escape_at[a];
+							else
+								fd.escaped[a].push_back((u32)i);
+
+							++escape_count[a];
+
+						}
+
+						since_escape[a] = escaped ? 0 : since_escape[a] + 1;
+
+					}
+
+					if (!q)
+						first_escaped = escaped;
 
 					if (!escaped && params.mode == dspace::axis_mode::mouse && d != 0) {
 
@@ -689,26 +747,38 @@ namespace frames {
 			}
 
 			one_run = d_f == 1 ? one_run + 1 : 0;
-			since_new = repeated ? since_new + std::max(0, d_f) : 0;
 			now = t;
 
 		}
 
 	}
 
-	// counters start from priors trained on real replays (frames_prior.h), relax and other replays apart.
-	// Relax frame times are coded against the replay's own delta table, so their time model starts flat.
-	inline void seed_priors(_models& M, bool relax) {
+	// relax replays and those without a device model (autopilot) play differently enough that priors trained on the
+	// others only cost them, so they start flat
+	inline bool uses_priors(const _side& side) {
+
+		if (side.relax)
+			return false;
+
+		for (int a{}; a < 2; ++a)
+			for (const auto& sg : side.axis[a].seg)
+				if (sg.p.mode != dspace::axis_mode::text)
+					return true;
+
+		return false;
+	}
+
+	// counters start from priors trained on real replays (frames_prior.h)
+	inline void seed_priors(_models& M, const _side& side) {
+
+		if (!uses_priors(side))
+			return;
 
 		const auto models{ M.all() };
-		const u32 v{ relax ? 1u : 0u };
 
 		for (u32 m{}; m < FRAMES_PRIOR_MODELS; ++m) {
 
-			if (relax && models[m] == &M.time)
-				continue;
-
-			for (u32 j{ FRAMES_PRIOR_START[v][m] }; j < FRAMES_PRIOR_START[v][m + 1]; ++j) {
+			for (u32 j{ FRAMES_PRIOR_START[m] }; j < FRAMES_PRIOR_START[m + 1]; ++j) {
 
 				const u32 value{ FRAMES_PRIOR_VALUES[j] };
 
@@ -723,70 +793,51 @@ namespace frames {
 
 	}
 
-	inline std::vector<u8> encode(_frame_data& fd, const _side& side, size_t frames) {
+	// the frames, then each axis's escape values (x, decode_axis's prediction) in order
+	inline std::vector<u8> encode(_frame_data& fd, const _side& side, size_t frames,
+		const std::vector<std::pair<float, float>> (&values)[2], bool exact_text) {
 
 		_models M{};
 
 		M.init(frames);
-		seed_priors(M, side.relax);
+		seed_priors(M, side);
 
 		cm::bit_encoder e{};
 
 		frame_loop(e, M, fd, side, frames, true);
 
-		return e.finish();
-	}
+		for (int a{}; a < 2; ++a) {
 
-	inline void decode(std::span<const u8> data, _frame_data& fd, const _side& side, size_t frames) {
+			int prev_len{};
 
-		_models M{};
-
-		M.init(frames);
-		seed_priors(M, side.relax);
-
-		cm::bit_decoder d{ data };
-
-		frame_loop(d, M, fd, side, frames, false);
-
-	}
-
-	// coded size of one axis's moves and slack on their own, for comparing device models
-	inline size_t axis_bytes(const dspace::axis_params& p, const dspace::axis_streams& st, std::span<const int> dt, int a) {
-
-		_models M{};
-
-		M.init_moves(st.K.size(), 3);
-
-		cm::bit_encoder e{};
-		dspace::move_predictor mp{};
-
-		_axis_history history{};
-		size_t escape_at{}, slack_at{};
-
-		for (size_t i{}; i < st.K.size(); ++i) {
-
-			const i64 d{ st.K[i] - (i ? st.K[i - 1] : 0) };
-			const i64 pr{ mp.pred(a, dt[i]) };
-
-			_move_features mf{ move_features(mp.ctx(p, pr, a, 0)) };
-
-			history.fill(mf, dt[i]);
-			history.push(move_residual(e, M, d - pr, mf), d);
-
-			mp.push(a, d, pr);
-			mp.advance(dt[i]);
-
-			const bool escaped{ escape_at < st.escapes.size() && st.escapes[escape_at].first == i };
-
-			if (escaped)
-				++escape_at;
-
-			if (!escaped && p.mode == dspace::axis_mode::mouse && d != 0 && slack_at < st.slack.size())
-				slack_value(e, M.slack, st.slack[slack_at++], a, d);
+			for (const auto& [x, pred] : values[a])
+				escape_value(e, M.escape_value, x, pred, a, exact_text, prev_len, true);
 
 		}
 
-		return e.finish().size();
+		return e.finish();
 	}
+
+	// decodes the frames on construction, then hands out the escape values as decode_axis asks for them
+	struct _reader {
+
+		_models M;
+		cm::bit_decoder d;
+		int prev_len[2]{};
+
+		_reader(std::span<const u8> data, _frame_data& fd, const _side& side, size_t frames) : d{ data } {
+
+			M.init(frames);
+			seed_priors(M, side);
+
+			frame_loop(d, M, fd, side, frames, false);
+
+		}
+
+		float escape(float pred, int a, bool exact_text) {
+			return escape_value(d, M.escape_value, 0.f, pred, a, exact_text, prev_len[a], false);
+		}
+
+	};
 
 }

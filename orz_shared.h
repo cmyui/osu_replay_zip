@@ -93,26 +93,13 @@ constexpr u32 OSR_MOD_RELAX{ 1 << 7 };
 
 enum class orz_tag : u8 {
 
-	time_delta_table = 0,
+	key_bit_stream = 0,
 
-	key_bit_stream,
-
-	osr_header,
-	osr_after_life,
-	osr_tail,
-
-	seed,
-
+	osr_parts, // .osr bytes kept as they are: the header, what follows the life bar, what follows the replay data
 	life_bar,
-
-	time_delta_rc,
 	osr_replay_data,
 
-	device_space_info,
-	device_escape,
-	device_escape_values,
-	device_moves_rc,
-
+	// *_time_rc streams start with the delta table (frame_time::write_table)
 	mania_time_rc,
 	mania_scroll_speed,
 
@@ -123,7 +110,7 @@ enum class orz_tag : u8 {
 	fruits_x_rc,
 	fruits_escape,
 
-	std_frames, // osu!standard keys, times, repeat flags, moves and slack (orz_frames.h)
+	std_frames, // osu!standard: delta table, device model, then keys, times, repeat flags, moves, escapes and slack (orz_frames.h)
 
 };
 
@@ -540,6 +527,8 @@ constexpr u8 ORZ_MAGIC{ 'r' };
 struct _orz_header {
 	u32 version, flags, frame_count, data_count;
 	u32 crc; // of the decoded replay
+	bool seeded;
+	u32 seed; // of the closing -12345 frame
 };
 
 struct _orz_data_block {
@@ -592,8 +581,13 @@ inline _orz_container read_container(const std::vector<u8>& file) {
 	for (int k{}; k < 32; ++k)
 		h.crc |= u32(small_read<1>(bs, i)) << k;
 
+	h.seeded = small_read<1>(bs, i) != 0;
+
+	for (int k{}; h.seeded && k < 32; ++k)
+		h.seed |= u32(small_read<1>(bs, i)) << k;
+
 	h.frame_count = read_bucket(bs, i, 16);
-	h.data_count = read_bucket(bs, i, 5);
+	h.data_count = read_bucket(bs, i, 3);
 
 	if (h.data_count > ORZ_MAX_STREAMS || h.frame_count > ORZ_MAX_FRAMES)
 		return c;
@@ -602,7 +596,7 @@ inline _orz_container read_container(const std::vector<u8>& file) {
 
 	for (auto& s : c.streams) {
 
-		const u32 tag{ read_bucket(bs, i, 5) };
+		const u32 tag{ read_bucket(bs, i, 4) };
 
 		s.block.is_compressed = small_read<1>(bs, i) != 0;
 		s.block.size = read_bucket(bs, i);
@@ -706,10 +700,8 @@ FORCEINLINE u32 crc32c_frame(u32 crc, const _osr_frame& f) {
 }
 
 constexpr orz_tag CRC_PART_TAGS[]{
-	orz_tag::osr_header,
+	orz_tag::osr_parts,
 	orz_tag::life_bar,
-	orz_tag::osr_after_life,
-	orz_tag::osr_tail,
 	orz_tag::osr_replay_data
 };
 

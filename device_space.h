@@ -379,61 +379,6 @@ namespace dspace {
 		return diff > -(1ll << 30) && diff < (1ll << 30);
 	}
 
-	inline void write_escape_value(float x, float pred, bit_stream& out, bool exact_text) {
-
-		if (i64 diff; exact_text ? escape_ulps(x, pred, diff) : escape_digits(x, pred, diff)) {
-
-			write_bucket(u32(rc::zz(diff) + 1), out, 2, 4, 8, 16);
-
-			return;
-		}
-
-		write_bucket(0, out, 2, 4, 8, 16);
-		write_float(x, out);
-
-	}
-
-	inline float read_escape_value(float pred, const _bit_view in, size_t& i, bool exact_text) {
-
-		const u32 code{ read_bucket(in, i, 2, 4, 8, 16) };
-
-		if (code && exact_text)
-			return float_from_bits(u32((i64)std::bit_cast<u32>(pred) + rc::unzz(code - 1)));
-
-		if (code)
-			return escape_from_digits(pred, rc::unzz(code - 1));
-
-		return read_float(in, i);
-	}
-
-	// escape frame list (index = frame * 2 + axis), values are stored separately
-	FORCEINLINE void write_escape_index(const std::vector<u32>& index, bit_stream& out) {
-
-		write_bucket((u32)index.size(), out, 8, 16);
-
-		u32 prev{};
-		for (const u32 v : index) {
-
-			write_bucket(v - prev, out, 4, 8, 16);
-			prev = v;
-
-		}
-
-	}
-
-	FORCEINLINE std::vector<u32> read_escape_index(const _bit_view in) {
-
-		size_t i{};
-
-		std::vector<u32> index(std::min<size_t>(read_bucket(in, i, 8, 16), in.max_size() / 4));
-
-		u32 prev{};
-		for (auto& v : index)
-			v = prev += read_bucket(in, i, 4, 8, 16);
-
-		return index;
-	}
-
 	// bounds: optional precomputed text_bounds of vals
 	// max_escapes: give up past this many (streams incomplete)
 	// decoded: optional, gets what decode_axis will return per frame
@@ -747,17 +692,10 @@ namespace dspace {
 	// mouse reports a decode may simulate, guards damaged files
 	constexpr i64 MOUSE_DECODE_BUDGET{ 1ll << 27 };
 
-	// values / cursor: escape value stream (null: use escapes[].second); false if damaged
-	inline bool decode_axis(const axis_model& m, const std::vector<i64>& K,
-		const std::vector<int>& slack, const std::vector<std::pair<u32, float>>& escapes, std::span<const int> dt,
-		bool exact_text, std::vector<float>& out, const _bit_view* values = nullptr, size_t* cursor = nullptr) {
-
-		size_t ev{};
-
-		const auto escape_value = [&](float pred) {
-
-			return values ? read_escape_value(pred, *values, *cursor, exact_text) : escapes[ev++].second;
-		};
+	// escapes: escaped positions, ascending; escape_value(pred): the next escaped value. false if damaged
+	template<typename Value>
+	inline bool decode_axis(const axis_model& m, const std::vector<i64>& K, const std::vector<int>& slack,
+		const std::vector<u32>& escapes, std::span<const int> dt, bool exact_text, std::vector<float>& out, Value&& escape_value) {
 
 		out.assign(K.size(), 0.f);
 
@@ -777,7 +715,7 @@ namespace dspace {
 			const axis_params& p{ m.seg[sg].p };
 			const bool segment_start{ m.seg[sg].start == i };
 
-			const bool escaped{ e < escapes.size() && escapes[e].first == i };
+			const bool escaped{ e < escapes.size() && escapes[e] == i };
 
 			if (escaped)
 				++e;
@@ -928,9 +866,7 @@ namespace dspace {
 		return p;
 	}
 
-	inline std::vector<u8> write_info(const _model_info& m) {
-
-		bit_stream o{};
+	inline void write_info(const _model_info& m, bit_stream& o) {
 
 		for (const auto& ax : m.axis) {
 
@@ -948,17 +884,11 @@ namespace dspace {
 
 		}
 
-		return o.data;
 	}
 
-	inline bool read_info(std::span<const u8> data, _model_info& out) {
+	// from bit i of in, which ends past it
+	inline bool read_info(const _bit_view in, size_t& i, _model_info& out) {
 
-		if (data.empty())
-			return false;
-
-		const _bit_view in{ data };
-
-		size_t i{};
 		_model_info m{};
 
 		for (auto& ax : m.axis) {
