@@ -353,7 +353,7 @@ namespace standard {
 
 			bits += gamma((u64)std::abs(d - pr));
 
-			mp.push(axis, d, pr);
+			mp.push(axis, d);
 			mp.advance(dt[i]);
 
 		}
