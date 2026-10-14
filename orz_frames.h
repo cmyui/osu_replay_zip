@@ -413,19 +413,6 @@ namespace frames {
 
 	};
 
-	// the fields of dspace::move_ctx used here: prediction sign, |prediction| bucket and mode
-	FORCEINLINE _move_features move_features(u64 ctx) {
-
-		_move_features f{};
-
-		f.sign = (int)(ctx / 3 % 3);
-		ctx /= 3 * 3 * 3 * 3 * 2; // run, sign, previous miss, first axis miss, axis
-		f.bkp = (int)(ctx % 32); ctx /= 32;
-		f.mode = (int)ctx;
-
-		return f;
-	}
-
 	// move residual: zero, sign, bit length (unary from about the usual length), two modelled bits below the leading one,
 	// then raw bits
 	template<typename Coder>
@@ -719,7 +706,11 @@ namespace frames {
 
 					const dspace::axis_params& params{ side.axis[a].at(i) };
 
-					_move_features mf{ move_features(mp.ctx(params, pr, a, 0)) };
+					_move_features mf{};
+
+					mf.mode = (int)params.mode;
+					mf.bkp = rc::bk(pr);
+					mf.sign = pr < 0 ? 0 : pr == 0 ? 1 : 2;
 
 					history[a].fill(mf, dt);
 
