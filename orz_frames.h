@@ -539,7 +539,8 @@ namespace frames {
 		return (int)rc::unzz(v);
 	}
 
-	// an autopilot move's field: zero, sign, bit length (unary), then the bits under the leading one, the first two modelled
+	// an autopilot move's field: zero, sign, bit length (unary), then the bits under the leading one, the first two modelled.
+	// Valid fields are far below MAX_MOVE.
 	template<typename Coder>
 	i64 ap_number(Coder& c, cm::model& m, i64 v, u64 field, u64 ctx) {
 
@@ -570,7 +571,7 @@ namespace frames {
 
 		}
 
-		return negative ? -(i64)out : (i64)out;
+		return std::clamp(negative ? -(i64)out : (i64)out, -MAX_MOVE, MAX_MOVE);
 	}
 
 	// an escaped position's value against decode_axis's prediction: the distance in 7 digit mantissas (in ulps for
