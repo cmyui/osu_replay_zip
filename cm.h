@@ -159,8 +159,8 @@ namespace cm {
 
 	constexpr int MAX_INPUTS{ 8 };
 
-	// a weight starts at 0.3 and moves about 0.02 * error * input per bit, which keeps up within a single replay
-	constexpr int MIX_WEIGHT{ 19661 }, MIX_RATE{ 82 };
+	// a weight starts at 0.3 and moves about 0.01 * error * input per bit, which keeps up within a single replay
+	constexpr int MIX_WEIGHT{ 19661 }, MIX_RATE{ 40 };
 
 	// refines a probability given a small context, interpolating 33 buckets over the stretched domain
 	struct apm {
