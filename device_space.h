@@ -874,9 +874,15 @@ namespace dspace {
 
 			u32 prev{};
 
+			bool writing_segment{};
+
 			for (const auto& sg : ax.seg) {
 
-				write_u(sg.start - prev, o);
+				if (writing_segment)
+					write_u(sg.start - prev, o);
+				else
+					writing_segment = true;
+
 				prev = sg.start;
 				write_params(sg.p, o);
 
@@ -902,9 +908,20 @@ namespace dspace {
 
 			u32 prev{};
 
+			bool writing_segment{};
+
 			for (auto& sg : ax.seg) {
 
-				sg.start = prev += read_u(in, i);
+				if (writing_segment)
+					sg.start = prev += read_u(in, i);
+				else {
+
+					sg.start = 0;
+
+					writing_segment = true;
+
+				}
+
 				sg.p = read_params(in, i);
 
 				if (sg.p.mode > axis_mode::text ||
