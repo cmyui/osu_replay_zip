@@ -13,9 +13,9 @@
 namespace cm {
 
 	// 4096 / (1 + e^(-d / 256)), d clamped to +-2047
-	FORCEINLINE int squash(int d) {
+	constexpr int squash_of(int d) {
 
-		static constexpr int T[33]{
+		constexpr int T[33]{
 			1, 2, 3, 6, 10, 16, 27, 45, 73, 120, 194, 310, 488, 747, 1101, 1546,
 			2047, 2549, 2994, 3348, 3607, 3785, 3901, 3975, 4022, 4050, 4068, 4079, 4085, 4089, 4092, 4093, 4094
 		};
@@ -33,33 +33,46 @@ namespace cm {
 		return (T[d] * (128 - w) + T[d + 1] * w + 64) >> 7;
 	}
 
-	// inverse of squash
+	// squash over -2048..2048 (the ends are its clamped values) and its inverse, as tables
+	constexpr auto SQUASH{ [] {
+
+		std::array<i16, 4097> t{};
+
+		for (int d{ -2048 }; d <= 2048; ++d)
+			t[d + 2048] = (i16)squash_of(d);
+
+		return t;
+	}() };
+
+	constexpr auto STRETCH{ [] {
+
+		std::array<i16, 4096> t{};
+
+		int pi{};
+
+		for (int x{ -2047 }; x <= 2047; ++x) {
+
+			const int v{ squash_of(x) };
+
+			for (int j{ pi }; j <= v; ++j)
+				t[j] = (i16)x;
+
+			pi = v + 1;
+
+		}
+
+		for (int j{ pi }; j < 4096; ++j)
+			t[j] = 2047;
+
+		return t;
+	}() };
+
+	FORCEINLINE int squash(int d) {
+		return SQUASH[std::clamp(d, -2048, 2048) + 2048];
+	}
+
 	FORCEINLINE int stretch(int p) {
-
-		static const auto T{ [] {
-
-			std::array<i16, 4096> t{};
-
-			int pi{};
-
-			for (int x{ -2047 }; x <= 2047; ++x) {
-
-				const int v{ squash(x) };
-
-				for (int j{ pi }; j <= v; ++j)
-					t[j] = (i16)x;
-
-				pi = v + 1;
-
-			}
-
-			for (int j{ pi }; j < 4096; ++j)
-				t[j] = 2047;
-
-			return t;
-		}() };
-
-		return T[p];
+		return STRETCH[p];
 	}
 
 	FORCEINLINE u64 hash(u64 a, u64 b) {
@@ -80,21 +93,21 @@ namespace cm {
 		u16 p{ 32768 }, n{};
 	};
 
+	constexpr auto RATE{ [] {
+
+		std::array<u32, COUNTER_LIMIT + 1> r{};
+
+		for (u32 n{}; n < r.size(); ++n)
+			r[n] = 131072u / (2 * n + 3);
+
+		return r;
+	}() };
+
 	FORCEINLINE void update(counter& c, int y) {
-
-		static const auto RATE{ [] {
-
-			std::array<u32, COUNTER_LIMIT + 1> r{};
-
-			for (u32 n{}; n < r.size(); ++n)
-				r[n] = 131072u / (2 * n + 3);
-
-			return r;
-		}() };
 
 		const i64 target{ y ? 65535 : 0 };
 
-		c.p = (u16)(c.p + (((target - c.p) * RATE[std::min(c.n, COUNTER_LIMIT)]) >> 16));
+		c.p = (u16)(c.p + (((target - c.p) * RATE[c.n]) >> 16));
 
 		if (c.n < COUNTER_LIMIT)
 			++c.n;
@@ -148,47 +161,6 @@ namespace cm {
 
 	// a weight starts at 0.3 and moves about 0.02 * error * input per bit, which keeps up within a single replay
 	constexpr int MIX_WEIGHT{ 19661 }, MIX_RATE{ 82 };
-
-	// weights in 16.16, inputs are stretched probabilities, one weight set per selector
-	struct mixer {
-
-		int n{};
-		std::vector<int> w;
-		int x[MAX_INPUTS]{};
-		int pr{ 2048 };
-		size_t base{};
-
-		void init(int inputs, size_t sets) {
-
-			n = inputs;
-			w.assign(sets * inputs, MIX_WEIGHT);
-
-		}
-
-		FORCEINLINE int mix(size_t set) {
-
-			base = set * n;
-
-			i64 dot{};
-
-			for (int i{}; i < n; ++i)
-				dot += (i64)x[i] * w[base + i];
-
-			pr = squash((int)std::clamp<i64>(dot >> 16, -2047, 2047));
-
-			return pr;
-		}
-
-		FORCEINLINE void update(int y) {
-
-			const int err{ ((y << 12) - pr) * MIX_RATE };
-
-			for (int i{}; i < n; ++i)
-				w[base + i] += (int)(((i64)x[i] * err + 0x8000) >> 16);
-
-		}
-
-	};
 
 	// refines a probability given a small context, interpolating 33 buckets over the stretched domain
 	struct apm {
@@ -317,7 +289,7 @@ namespace cm {
 	struct model {
 
 		line_table table;
-		mixer mix;
+		std::vector<int> weights; // mixer weights in 16.16 (inputs are stretched probabilities), a set per selector
 		apm refine;
 		int inputs{};
 		counter* lines[MAX_INPUTS]{};
@@ -327,7 +299,7 @@ namespace cm {
 			inputs = inputs_;
 
 			table.init(table_bits, width, record_keys);
-			mix.init(inputs, mix_sets);
+			weights.assign(mix_sets * inputs, MIX_WEIGHT);
 			refine.init(apm_contexts);
 
 		}
@@ -340,31 +312,57 @@ namespace cm {
 
 		}
 
-		template<typename Coder>
-		FORCEINLINE int code(Coder& c, int y, u32 slot, size_t set, size_t apm_context) {
+		// the input count known at compile time, so the loops unroll
+		template<int N, typename Coder>
+		FORCEINLINE int code_n(Coder& c, int y, u32 slot, size_t set, size_t apm_context) {
 
-			counter* k[MAX_INPUTS];
+			counter* k[N];
+			int x[N];
+			int* const w{ weights.data() + set * N };
 
-			for (int i{}; i < inputs; ++i) {
+			i64 dot{};
 
-				k[i] = &lines[i][slot];
+			for (int i{}; i < N; ++i) {
 
-				mix.x[i] = stretch(k[i]->p >> 4);
+				k[i] = lines[i] + slot;
+				x[i] = stretch(k[i]->p >> 4);
+				dot += (i64)x[i] * w[i];
 
 			}
 
-			const int p{ mix.mix(set) };
+			const int p{ squash((int)std::clamp<i64>(dot >> 16, -2047, 2047)) };
 			const int pa{ refine.refine(p, apm_context) };
 
 			y = c.code(y, std::clamp((p * 16 + 3 * pa) >> 2, 32, 65504));
 
-			for (int i{}; i < inputs; ++i)
-				update(*k[i], y);
+			const int err{ ((y << 12) - p) * MIX_RATE };
 
-			mix.update(y);
+			for (int i{}; i < N; ++i) {
+
+				update(*k[i], y);
+				w[i] += (int)(((i64)x[i] * err + 0x8000) >> 16);
+
+			}
+
 			refine.update(y);
 
 			return y;
+		}
+
+		template<typename Coder>
+		FORCEINLINE int code(Coder& c, int y, u32 slot, size_t set, size_t apm_context) {
+
+			switch (inputs) {
+			case 1: return code_n<1>(c, y, slot, set, apm_context);
+			case 2: return code_n<2>(c, y, slot, set, apm_context);
+			case 3: return code_n<3>(c, y, slot, set, apm_context);
+			case 4: return code_n<4>(c, y, slot, set, apm_context);
+			case 5: return code_n<5>(c, y, slot, set, apm_context);
+			case 6: return code_n<6>(c, y, slot, set, apm_context);
+			case 7: return code_n<7>(c, y, slot, set, apm_context);
+			default: return code_n<8>(c, y, slot, set, apm_context);
+			}
+
 		}
 
 		// a single decision on its own contexts
