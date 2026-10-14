@@ -212,6 +212,9 @@
     <ClInclude Include="orz_device_std.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="orz_autopilot.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
     <ClInclude Include="orz_decimal.h">
       <Filter>Header Files</Filter>
     </ClInclude>

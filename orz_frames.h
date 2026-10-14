@@ -7,6 +7,7 @@
 
 #include "cm.h"
 #include "frames_prior.h"
+#include "orz_autopilot.h"
 
 #include <algorithm>
 #include <array>
@@ -35,6 +36,7 @@ namespace frames {
 		std::vector<int> slack[2];       // per axis, in coding order
 		std::vector<u32> escaped[2];     // per axis, positions the device model escapes, ascending
 		std::vector<int> dt;             // per new position, ms since the previous one
+		std::vector<autopilot::event> moves; // autopilot moves, by the new position they are coded at
 	};
 
 	struct _side {
@@ -42,11 +44,12 @@ namespace frames {
 		std::vector<int> table;          // the replay's delta table
 		frame_time::_time_grid grid{ 0 };
 		bool relax{};
+		autopilot::_params ap{};
 	};
 
 	struct _models {
 
-		cm::model keys_changed, keys_bits, keys_high, time, repeat, move, move_bits, slack, escape, escape_value;
+		cm::model keys_changed, keys_bits, keys_high, time, repeat, move, move_bits, slack, escape, escape_value, ap_event, ap_value;
 
 		// in frames_prior.h order
 		std::array<cm::model*, FRAMES_PRIOR_MODELS> all() {
@@ -67,11 +70,12 @@ namespace frames {
 
 		}
 
-		void init(size_t frames, bool record_keys = false) {
+		// autopilot replays time frames with a seventh input, the next knot
+		void init(size_t frames, bool record_keys = false, bool autopilot = false) {
 
 			const int b{ (int)std::bit_width(frames) }, extra{ record_keys ? 4 : 0 };
 
-			init_keys_time(frames, record_keys);
+			init_keys_time(frames, record_keys, autopilot ? 7 : 6);
 
 			repeat.init(8, std::clamp(b + 4, 16, 22 + extra), 1, 64, 64, record_keys);
 			move.init(6, std::clamp(b + 3, 12, 19 + extra), 32, MOVE_STEPS * 4 * 2, MOVE_STEPS * 32, record_keys);
@@ -79,6 +83,8 @@ namespace frames {
 			slack.init(1, std::clamp(b - 2, 10, 16), 16, 64, 64, record_keys);
 			escape.init(5, std::clamp(b + 2, 12, 20 + extra), 1, 16 * 3, 16 * 3, record_keys);
 			escape_value.init(2, 10, 64, 1, 1);
+			ap_event.init(5, std::clamp(b, 10, 16), 1, 8, 8);
+			ap_value.init(2, 12, 64, 1, 1);
 
 		}
 
@@ -525,6 +531,40 @@ namespace frames {
 		return (int)rc::unzz(v);
 	}
 
+	// an autopilot move's field: zero, sign, bit length (unary), then the bits under the leading one, the first two modelled
+	template<typename Coder>
+	i64 ap_number(Coder& c, cm::model& m, i64 v, u64 field, u64 ctx) {
+
+		const u64 cx[2]{ field * 4096 + ctx, field };
+
+		m.bind(cx);
+
+		if (m.code(c, v == 0, 0u, 0, 0))
+			return 0;
+
+		const int negative{ m.code(c, v < 0, 1u, 0, 0) };
+
+		const u64 a{ v < 0 ? 0 - u64(v) : u64(v) };
+		const int len{ a ? 63 - std::countl_zero(a) : 0 };
+
+		int n{};
+
+		while (n < 62 && m.code(c, len > n, 2u + (u32)std::min(n, 29), 0, 0))
+			++n;
+
+		u64 out{ 1 };
+
+		for (int b{ n - 1 }, k{}; b >= 0; --b, ++k) {
+
+			const int bit{ (int)((a >> b) & 1) };
+
+			out = (out << 1) | (u64)(k < 2 ? m.code(c, bit, 32u + (u32)std::min(n, 15) * 2 + (u32)k, 0, 0) : c.code(bit, 32768));
+
+		}
+
+		return negative ? -(i64)out : (i64)out;
+	}
+
 	// an escaped position's value against decode_axis's prediction: the distance in 7 digit mantissas (in ulps for
 	// shortest round-trip text) when near, else the raw float. prev_len: per axis, the last distance's bit length.
 	template<typename Coder>
@@ -558,6 +598,83 @@ namespace frames {
 		const i64 d{ std::clamp<i64>(rc::unzz(((u64(1) << n) | raw(c, v, n)) - 1), -(1ll << 31), 1ll << 31) };
 
 		return exact_text ? float_from_bits(u32((i64)std::bit_cast<u32>(pred) + d)) : dspace::escape_from_digits(pred, d);
+	}
+
+	// autopilot, off the knots: the line through the last two new positions, in 7 digit ordinals against prev_K
+	FORCEINLINE i64 ap_extrapolate(const autopilot::trail& seen, i64 now, int a, i64 prev_K) {
+
+		i64 o;
+
+		return seen.n >= 2 && dotnet::text_ord(seen.line(now, a), false, o) ? std::clamp(o - prev_K, -MAX_MOVE, MAX_MOVE) : 0;
+	}
+
+	// autopilot in the frame loop: the knots so far, whether the last new position was on them, the last new positions at
+	// different times (between knots the speed is constant), moves so far, the last one's kind and time
+	struct _autopilot {
+		autopilot::path path;
+		autopilot::trail seen{};
+		bool covered{};
+		int since{};
+		size_t at{};
+		u64 last{ 2 };
+		i64 last_time{ 1 };
+	};
+
+	// autopilot: whether a move starts at new position i (past the knots), and the move
+	template<typename Coder>
+	void ap_move(Coder& c, _models& M, const _frame_data& fd, const _side& side, _autopilot& st, i64 now, size_t i, bool encoding) {
+
+		autopilot::path& ap{ st.path };
+		const u64 last{ st.last };
+
+		const bool is_knot{ st.covered && !ap.k.empty() };
+		const i64 gap{ ap.k.empty() ? 1 << 20 : now - ap.k.back().t };
+		const u64 sb{ log_bucket(st.since) }, gb{ log_bucket(gap) };
+		const u64 ctx[5]{ sb * 4 + last, gb * 4 + last, (sb * 32 + gb) * 2 + is_knot, (u64)is_knot * 4 + last, sb * 2 + is_knot };
+
+		const bool want{ encoding && st.at < fd.moves.size() && fd.moves[st.at].sample == i };
+
+		if (!M.ap_event.code(c, want, ctx, (size_t)last * 2 + is_knot, (size_t)last * 2 + is_knot))
+			return;
+
+		autopilot::event e{ want ? fd.moves[st.at++] : autopilot::event{} };
+
+		auto& m{ M.ap_value };
+
+		e.type = (autopilot::kind)std::clamp<i64>(ap_number(c, m, (i64)e.type, 0, last), 0, 1);
+		e.wait = ap_number(c, m, e.wait, 1, (u64)e.type * 2 + is_knot);
+
+		// a move straight after a line move of the same kind: its time against that one's
+		const bool chained{ is_knot && last == 0 && e.type == autopilot::kind::line && e.wait == 0 };
+
+		e.time = chained ? st.last_time + ap_number(c, m, e.time - st.last_time, 8, 0) : ap_number(c, m, e.time - 1, 2, (u64)e.type) + 1;
+
+		for (int a{}; a < 2; ++a) {
+
+			if (!is_knot)
+				e.from_ulp[a] = ap_number(c, m, e.from_ulp[a], 3, (u64)a);
+
+			e.to_int[a] = ap_number(c, m, e.to_int[a], 4, (u64)a * 3 + (a ? (u64)e.to_int[0] : 2)) != 0;
+			e.to[a] = ap_number(c, m, e.to[a], e.to_int[a] ? 5 : 6, (u64)a * 2 + (u64)e.type);
+
+			if (!e.to_int[a])
+				e.to_ulp[a] = ap_number(c, m, e.to_ulp[a], 7, (u64)a);
+
+		}
+
+		// the move starts from the last knot, or from the last new position when the knots ended before it
+		float anchor[2];
+
+		for (int a{}; a < 2; ++a)
+			anchor[a] = is_knot ? ap.k.back().p[a] : dotnet::from_text_ord(fd.K[a][i - 1], false);
+
+		const i64 anchor_t{ is_knot ? ap.k.back().t : st.seen.p[2].t };
+
+		ap.add(autopilot::resolve(e, anchor, is_knot, anchor_t, is_knot ? ap.tail() : st.seen), anchor_t, is_knot, side.ap.sample_ms());
+
+		st.last = (u64)e.type;
+		st.last_time = std::clamp<i64>(e.time, 1, autopilot::MAX_MOVE_MS);
+		st.since = 0;
 	}
 
 	// encoding reads fd, decoding (encoding false) fills it; side must match on both ends
@@ -597,6 +714,10 @@ namespace frames {
 		size_t i{}, escape_at[2]{}, slack_at[2]{};
 		i64 elapsed{}, first_res{};
 
+		// autopilot
+		const autopilot::_screen ap_screen{ side.ap };
+		_autopilot ap{ { {}, 0, 4 * frames + 4096 } };
+
 		// escapes: whether an axis has any, positions since its last, how many so far
 		bool escapes[2]{}, first_escaped{};
 		int since_escape[2]{ 64, 64 };
@@ -621,7 +742,18 @@ namespace frames {
 				// the repeat flags of the last three frames (2 before the first)
 				const u64 r{ ((f >= 1 ? (u64)fd.repeated[f - 1] : 2) * 3 + (f >= 2 ? (u64)fd.repeated[f - 2] : 2)) * 3 + (f >= 3 ? (u64)fd.repeated[f - 3] : 2) };
 
-				fd.delta[f] = time.code(c, M.time, std::span{ fd.delta }.first(f), encoding ? fd.delta[f] : 0, phase, changed, kc1, r);
+				// autopilot: frames often land on a knot, the next one ahead is known within a move
+				u64 next_knot{};
+
+				if (side.ap.on) {
+
+					const i64 next{ ap.path.next(now) };
+
+					next_knot = (next < 0 ? 63 : (u64)std::min<i64>(next - now, 62)) * 64 + (f ? delta_bucket(fd.delta[f - 1]) : 50);
+
+				}
+
+				fd.delta[f] = time.code(c, M.time, std::span{ fd.delta }.first(f), encoding ? fd.delta[f] : 0, phase, changed, kc1, r, next_knot);
 
 			}
 
@@ -695,6 +827,34 @@ namespace frames {
 
 				i64 first_d{}, first_pred{};
 
+				// autopilot: a move when the knots end before this frame, then the knots' position
+				i64 ap_pred[2]{};
+				bool ap_known{};
+
+				if (side.ap.on) {
+
+					const i64 t_abs{ now + d_f };
+
+					if (i && !ap.path.covers(t_abs))
+						ap_move(c, M, fd, side, ap, t_abs, i, encoding);
+
+					ap_known = ap.path.covers(t_abs);
+					ap.covered = ap_known;
+					++ap.since;
+
+					if (ap_known) {
+
+						float v[2];
+
+						ap.path.predict(t_abs, v);
+
+						for (int a{}; a < 2; ++a)
+							ap_known &= dotnet::text_ord(ap_screen.field(v[a], a), false, ap_pred[a]);
+
+					}
+
+				}
+
 				for (int q{}; q < 2; ++q) {
 
 					const int a{ q ? 1 - first : first };
@@ -704,6 +864,11 @@ namespace frames {
 					if (q)
 						pr = dspace::move_predictor::scaled(pr, first_d, first_pred);
 
+					const i64 prev_K{ i ? fd.K[a][i - 1] : 0 };
+
+					if (side.ap.on)
+						pr = ap_known ? ap_pred[a] - prev_K : ap_extrapolate(ap.seen, now + d_f, a, prev_K);
+
 					const dspace::axis_params& params{ side.axis[a].at(i) };
 
 					_move_features mf{};
@@ -711,6 +876,9 @@ namespace frames {
 					mf.mode = (int)params.mode;
 					mf.bkp = rc::bk(pr);
 					mf.sign = pr < 0 ? 0 : pr == 0 ? 1 : 2;
+
+					if (side.ap.on)
+						mf.mode = ap_known ? 5 : 6;
 
 					history[a].fill(mf, dt);
 
@@ -720,7 +888,6 @@ namespace frames {
 					mf.vel_gap = mp.n >= 1 ? signed_length(dspace::move_predictor::round_div(mp.hist[a][0] * dspace::move_predictor::ms(pdt),
 						dspace::move_predictor::ms(mp.hist_dt[0])) - pr) : 0;
 
-					const i64 prev_K{ i ? fd.K[a][i - 1] : 0 };
 					const i64 res{ std::clamp(move_residual(c, M, encoding ? fd.K[a][i] - prev_K - pr : 0, mf), -MAX_MOVE, MAX_MOVE) };
 					const i64 d{ std::clamp(res + pr, -MAX_MOVE, MAX_MOVE) };
 
@@ -792,6 +959,14 @@ namespace frames {
 
 				mp.advance(pdt);
 
+				if (side.ap.on) {
+
+					const i64 t_abs{ now + d_f };
+
+					ap.seen.push({ t_abs, { dotnet::from_text_ord(fd.K[0][i], false), dotnet::from_text_ord(fd.K[1][i], false) } });
+
+				}
+
 				last_move = std::abs(fd.K[0][i] - (i ? fd.K[0][i - 1] : 0)) + std::abs(fd.K[1][i] - (i ? fd.K[1][i - 1] : 0));
 
 				++i;
@@ -852,7 +1027,7 @@ namespace frames {
 
 		_models M{};
 
-		M.init(frames);
+		M.init(frames, false, side.ap.on);
 		seed_priors(M, side);
 
 		cm::bit_encoder e{};
@@ -880,7 +1055,7 @@ namespace frames {
 
 		_reader(std::span<const u8> data, _frame_data& fd, const _side& side, size_t frames) : d{ data } {
 
-			M.init(frames);
+			M.init(frames, false, side.ap.on);
 			seed_priors(M, side);
 
 			frame_loop(d, M, fd, side, frames, false);

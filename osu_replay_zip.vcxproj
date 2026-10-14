@@ -209,6 +209,7 @@
     <ClInclude Include="Lib\Sort.h" />
     <ClInclude Include="Lib\Threads.h" />
     <ClInclude Include="life_prior.h" />
+    <ClInclude Include="orz_autopilot.h" />
     <ClInclude Include="orz_decimal.h" />
     <ClInclude Include="orz_device_std.h" />
     <ClInclude Include="orz_dotnet.h" />
