@@ -109,8 +109,9 @@ namespace cm {
 		u64 mask{};
 		u32 width{};
 
-		// optional full hash per line, for exporting priors
+		// optional full hash and use count per line, for exporting priors
 		std::vector<u64> keys;
+		std::vector<u32> uses;
 
 		void init(int bits, u32 width_, bool record_keys = false) {
 
@@ -118,8 +119,12 @@ namespace cm {
 			t.assign(size_t(width) << bits, counter{});
 			mask = (u64(1) << bits) - 1;
 
-			if (record_keys)
+			if (record_keys) {
+
 				keys.assign(size_t(1) << bits, 0);
+				uses.assign(size_t(1) << bits, 0);
+
+			}
 
 		}
 
@@ -127,8 +132,12 @@ namespace cm {
 
 			const size_t i{ (size_t)(h & mask) };
 
-			if (!keys.empty())
+			if (!keys.empty()) {
+
 				keys[i] = h;
+				++uses[i];
+
+			}
 
 			return &t[i * width];
 		}

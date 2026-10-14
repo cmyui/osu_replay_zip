@@ -8,6 +8,7 @@
 #include "frames_prior.h"
 
 #include <algorithm>
+#include <array>
 #include <bit>
 #include <span>
 #include <vector>
@@ -49,6 +50,11 @@ namespace frames {
 	struct _models {
 
 		cm::model keys_changed, keys_bits, keys_high, time, repeat, move, move_bits, slack;
+
+		// in frames_prior.h order
+		std::array<cm::model*, FRAMES_PRIOR_MODELS> all() {
+			return { &keys_changed, &keys_bits, &keys_high, &time, &repeat, &move, &move_bits, &slack };
+		}
 
 		// tables follow the replay's length up to a cap (the frame count of a file to decode is untrusted),
 		// and are larger when training priors
@@ -694,8 +700,7 @@ namespace frames {
 	// Relax frame times are coded against the replay's own delta table, so their time model starts flat.
 	inline void seed_priors(_models& M, bool relax) {
 
-		cm::model* models[FRAMES_PRIOR_MODELS]{ &M.keys_changed, &M.keys_bits, &M.keys_high, &M.time, &M.repeat, &M.move, &M.move_bits, &M.slack };
-
+		const auto models{ M.all() };
 		const u32 v{ relax ? 1u : 0u };
 
 		for (u32 m{}; m < FRAMES_PRIOR_MODELS; ++m) {
