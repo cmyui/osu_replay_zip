@@ -73,7 +73,7 @@ namespace frames {
 
 			init_keys_time(frames, record_keys);
 
-			repeat.init(7, std::clamp(b + 4, 16, 22 + extra), 1, 64, 64, record_keys);
+			repeat.init(8, std::clamp(b + 4, 16, 22 + extra), 1, 64, 64, record_keys);
 			move.init(6, std::clamp(b + 3, 12, 19 + extra), 32, MOVE_STEPS * 4 * 2, MOVE_STEPS * 32, record_keys);
 			move_bits.init(2, std::clamp(b + 2, 12, 20 + extra), 1, 8 * 4, 8 * 32, record_keys);
 			slack.init(1, std::clamp(b - 2, 10, 16), 16, 64, 64, record_keys);
@@ -653,7 +653,12 @@ namespace frames {
 				const u64 dd{ bucket(d_f, 30) }, s{ bucket(repeat_since, 40) };
 				const u64 p1{ fd.repeated[f - 1] }, p2{ f >= 2 ? (u64)fd.repeated[f - 2] : 2 }, p3{ f >= 3 ? (u64)fd.repeated[f - 3] : 2 };
 				const u64 moved{ (u64)std::min<i64>(last_move, 40) };
-				const u64 ctx[7]{
+
+				// bit length of the move the predictor expects by now (21 before the first position)
+				const int since{ (int)std::clamp<i64>(elapsed, INT_MIN, INT_MAX) };
+				const u64 expect{ i ? (u64)std::min(bit_length(std::abs(mp.pred(0, since)) + std::abs(mp.pred(1, since))), 20) : 21 };
+
+				const u64 ctx[8]{
 					((s * 40 + dd) * 4 + (u64)std::min(repeat_run, 3)) * 2 + (u64)changed,
 					((dd * 3 + p1) * 3 + p2) * 2 + (u64)changed,
 					s * 40 + dd,
@@ -661,6 +666,7 @@ namespace frames {
 					(s * 41 + moved) * 16 + (u64)std::min(repeat_run, 15),
 					(s * 40 + dd) * 41 + moved,
 					(u64)std::min(repeat_run, 31) * 40 + dd,
+					(expect * 41 + s) * 40 + dd,
 				};
 
 				const size_t set{ (size_t)std::min<u64>(dd, 20) * 3 + (size_t)std::min<u64>(p1, 2) };
