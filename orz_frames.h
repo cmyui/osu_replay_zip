@@ -217,12 +217,7 @@ namespace frames {
 
 		if (n == 12) {
 
-			u64 long_ctx[8];
-
-			for (int k{}; k < 8; ++k)
-				long_ctx[k] = ctx[k] * 2 + 1;
-
-			M.move.bind(long_ctx);
+			M.move.bind(ctx, 1);
 
 			while (n < 62 && decide(len > n, 16 + (u32)std::min(n - 12, 15)))
 				++n;

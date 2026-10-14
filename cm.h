@@ -323,10 +323,11 @@ namespace cm {
 
 		}
 
-		FORCEINLINE void bind(const u64* ctx) {
+		// salt gives a second set of lines for the same contexts
+		FORCEINLINE void bind(const u64* ctx, u64 salt = 0) {
 
 			for (int i{}; i < inputs; ++i)
-				lines[i] = table.line(hash((u64)i, ctx[i]));
+				lines[i] = table.line(hash(salt * MAX_INPUTS + (u64)i, ctx[i]));
 
 		}
 
