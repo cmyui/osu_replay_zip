@@ -158,15 +158,8 @@ static bool decode_frames(const std::vector<u8>& raw_bytes, const u32 options, _
 		taiko::decode(header, stream_data, R);
 	else if (header->flags & ORZ_FLAG::fruits_catcher)
 		fruits::decode(header, stream_data, R);
-	else {
-
-		for (auto& f : R)
-			f.keys ^= (f.keys >> 2) & 3;
-
-		if (!standard::decode(header, stream_data, R))
-			return false;
-
-	}
+	else if (!standard::decode(header, stream_data, R))
+		return false;
 
 	// readd the closing seed frame
 	if (const auto& seed{ stream_data[orz_tag::seed] }; seed.size() == 4)

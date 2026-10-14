@@ -58,55 +58,15 @@ namespace frame_time {
 
 	struct _time_grid {
 
-		u64 rate{ 1 };
 		_grid_period period{ GRID_PERIODS[0] };
 
-		_time_grid(const std::vector<int>& table, u32 grid) {
-
-			period = GRID_PERIODS[grid < GRID_PERIOD_COUNT ? grid : 0];
-
-			if (table.empty())
-				return;
-
-			double step{ (double)table[0] };
-
-			if (table.size() > 1 && std::abs((i64)table[0] - table[1]) == 1)
-				step = ((i64)table[0] + table[1]) * 0.5;
-
-			rate = step < 14 ? 0 : step <= 20 ? 1 : 2;
-
-		}
+		explicit _time_grid(u32 grid) : period{ GRID_PERIODS[grid < GRID_PERIOD_COUNT ? grid : 0] } {}
 
 		u64 bin(i64 now) const {
 			return grid_phase(now, period);
 		}
 
 	};
-
-	inline u64 osu_ctx(const std::vector<_osr_frame>& R, size_t i, i64 now, const _time_grid& time_grid) {
-
-		if (i < 2)
-			return 0;
-
-		const int a{ R[i].keys != R[i - 1].keys }, b{ R[i - 1].keys != R[i - 2].keys };
-
-		if (i >= 3 && (u32)R[i - 1].delta <= 1 && (u32)R[i - 2].delta <= 1) {
-
-			size_t j{ i - 1 };
-			u64 run{}, prev_run{};
-
-			for (; j > 0 && R[j].delta == 0 && run < 7; --j)
-				++run;
-
-			if (j > 0 && R[j].delta != 0)
-				for (--j; j > 0 && R[j].delta == 0 && prev_run < 7; --j)
-					++prev_run;
-
-			return 300 + ((u64)a * 8 + run) * 8 + prev_run;
-		}
-
-		return ((u64)(a * 2 + b) * 25 + time_grid.bin(now)) * 3 + time_grid.rate;
-	}
 
 	FORCEINLINE u64 grid_ctx(bool changed, i64 now, size_t i, const _time_grid& time_grid) {
 		return i < 2 ? 0 : (u64)changed * 25 + time_grid.bin(now);
@@ -295,7 +255,7 @@ namespace frame_time {
 
 		write_table(orz, table, grid);
 
-		const _time_grid time_grid{ table, grid };
+		const _time_grid time_grid{ grid };
 
 		write_indices(orz, tag, k, table, delta, [&](size_t i, i64 now) {
 
@@ -311,7 +271,7 @@ namespace frame_time {
 		u32 grid{};
 
 		const auto table{ read_table(stream_data, grid) };
-		const _time_grid time_grid{ table, grid };
+		const _time_grid time_grid{ grid };
 
 		read_indices(stream_data[tag], k, table, delta.size(),
 			[&](size_t i, i64 now) {

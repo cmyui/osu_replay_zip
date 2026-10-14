@@ -181,8 +181,9 @@
     <ClCompile Include="Source.cpp" />
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="device_prior.h" />
+    <ClInclude Include="cm.h" />
     <ClInclude Include="device_space.h" />
+    <ClInclude Include="frames_prior.h" />
     <ClInclude Include="fruits_prior.h" />
     <ClInclude Include="Lib\7z.h" />
     <ClInclude Include="Lib\7zAlloc.h" />
@@ -216,6 +217,7 @@
     <ClInclude Include="orz_encoder_mania.h" />
     <ClInclude Include="orz_encoder_std.h" />
     <ClInclude Include="orz_encoder_taiko.h" />
+    <ClInclude Include="orz_frames.h" />
     <ClInclude Include="orz_life.h" />
     <ClInclude Include="orz_read.h" />
     <ClInclude Include="orz_shared.h" />

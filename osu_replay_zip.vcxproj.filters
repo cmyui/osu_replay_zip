@@ -233,7 +233,13 @@
     <ClInclude Include="device_space.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="device_prior.h">
+    <ClInclude Include="cm.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="frames_prior.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="orz_frames.h">
       <Filter>Header Files</Filter>
     </ClInclude>
   </ItemGroup>

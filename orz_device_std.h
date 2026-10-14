@@ -358,7 +358,7 @@ namespace standard {
 
 		}
 
-		return total + dspace::moves_rc_bytes(p, a, dt, axis);
+		return total + frames::axis_bytes(p, a, dt, axis);
 	}
 
 	// common window sizes, tried for reversing the playfield transform

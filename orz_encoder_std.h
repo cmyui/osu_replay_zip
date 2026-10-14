@@ -1,5 +1,6 @@
 #pragma once
 
+#include "orz_frames.h"
 #include "orz_device_std.h"
 
 #include <algorithm>
@@ -9,26 +10,6 @@
 
 namespace standard {
 
-	void encode_delta_time(const _osr& r, _orz_construct& orz) {
-
-		if (r.size() < 3)
-			return;
-
-		const auto delta{ frame_time::deltas(r) };
-		const auto table{ frame_time::build_table(delta) };
-		const u32 grid{ frame_time::pick_grid(delta) };
-
-		frame_time::write_table(orz, table, grid);
-
-		const frame_time::_time_grid time_grid{ table, grid };
-
-		frame_time::write_indices(orz, orz_tag::time_delta_rc, frame_time::osu, table, delta, [&](size_t i, i64 now) {
-
-			return frame_time::osu_ctx(r, i, now, time_grid);
-		});
-
-	}
-		
 	namespace repeat {
 
 		inline std::vector<u8> flags(const _osr& r) {
@@ -82,6 +63,10 @@ namespace standard {
 		std::vector<int> delta;
 		std::vector<u8> repeated;
 		std::vector<u32> sample;
+		std::vector<u32> keys; // folded, K1 / K2 imply M1 / M2
+		std::vector<int> table;
+		u32 grid{};
+		bool relax{};
 	};
 
 	static _shared_streams shared_streams(const _osr& r, const u32 flags, orz_state& state) {
@@ -91,18 +76,23 @@ namespace standard {
 		sh.time.frame_count = (u32)r.size();
 		sh.time.flags = flags;
 
-		encode_delta_time(r, sh.time);
-
 		sh.delta = frame_time::deltas(r);
+		sh.table = frame_time::build_table(sh.delta);
+		sh.grid = frame_time::pick_grid(sh.delta);
+
+		frame_time::write_table(sh.time, sh.table, sh.grid);
+
 		sh.repeated = repeat::flags(r);
 		sh.sample = repeat::sample_of(sh.repeated);
 
-		_key_data_constructor kd{};
+		sh.keys.resize(r.size());
 
-		for (const auto& f : r)
-			kd.tick_std(f.keys);
+		for (size_t i{}; i < r.size(); ++i)
+			sh.keys[i] = r[i].keys ^ ((r[i].keys >> 2) & 3);
 
-		sh.osr.add_osr_parts(kd);
+		sh.relax = (flags & ORZ_FLAG::relax) != 0;
+
+		sh.osr.add_osr_parts();
 
 		return sh;
 	}
@@ -135,9 +125,29 @@ namespace standard {
 
 		}
 
-		const auto bytes{ dspace::write_moves_rc(m.axis, p.st.data(), shared.delta, shared.repeated) };
+		{
 
-		p.streams.add_stream(orz_tag::device_moves_rc, bytes.data(), bytes.size());
+			frames::_frame_data fd{ shared.delta, shared.keys, shared.repeated };
+
+			std::vector<u32> esc[2];
+
+			for (int a{}; a < 2; ++a) {
+
+				fd.K[a] = p.st[a].K;
+				fd.slack[a] = p.st[a].slack;
+
+				for (const auto& [f, v] : p.st[a].escapes)
+					esc[a].push_back(f);
+
+			}
+
+			const frames::_side side{ m.axis, { &esc[0], &esc[1] }, shared.table, frame_time::_time_grid{ shared.grid }, shared.relax };
+
+			const auto bytes{ frames::encode(fd, side, shared.delta.size()) };
+
+			p.streams.add_stream(orz_tag::std_frames, bytes.data(), bytes.size());
+
+		}
 
 		std::vector<u32> index;
 
@@ -375,25 +385,9 @@ namespace standard {
 	
 	bool decode(const _orz_header* header, const _stream_map& stream_data, std::vector<_osr_frame>& R) {
 
-		if (const auto& trc{ stream_data[orz_tag::time_delta_rc] }; trc.size()) {
+		u32 grid{};
 
-			u32 grid{};
-
-			const auto table{ frame_time::read_table(stream_data, grid) };
-			const frame_time::_time_grid time_grid{ table, grid };
-
-			frame_time::read_indices(trc, frame_time::osu, table, R.size(),
-				[&](size_t i, i64 now) {
-
-					return frame_time::osu_ctx(R, i, now, time_grid);
-				},
-				[&](size_t i, int d) {
-
-					R[i].delta = d;
-
-				});
-
-		}
+		const auto table{ frame_time::read_table(stream_data, grid) };
 
 		dspace::_model_info info{};
 
@@ -401,23 +395,26 @@ namespace standard {
 			return R.empty();
 
 		std::vector<std::pair<u32, float>> escapes[2];
+		std::vector<u32> escaped[2];
 
-		for (const u32 index : dspace::read_escape_index(_bit_view{ stream_data[orz_tag::device_escape] }))
+		for (const u32 index : dspace::read_escape_index(_bit_view{ stream_data[orz_tag::device_escape] })) {
+
 			escapes[index % 2].push_back({ index / 2, 0.f });
+			escaped[index % 2].push_back(index / 2);
+
+		}
 
 		const _bit_view escape_values{ stream_data[orz_tag::device_escape_values] };
 
 		size_t escape_cursor{};
 
-		std::vector<i64> K[2];
-		std::vector<int> slack[2];
+		frames::_frame_data fd{};
 
-		std::vector<int> dt;
-		std::vector<u8> repeated;
+		const frames::_side side{ info.axis, { &escaped[0], &escaped[1] }, table, frame_time::_time_grid{ grid }, (header->flags & ORZ_FLAG::relax) != 0 };
 
-		dspace::read_moves_rc(stream_data[orz_tag::device_moves_rc], info.axis, escapes, frame_time::deltas(R), K, slack, dt, repeated);
+		frames::decode(stream_data[orz_tag::std_frames], fd, side, R.size());
 
-		const auto sample{ repeat::sample_of(repeated) };
+		const auto sample{ repeat::sample_of(fd.repeated) };
 
 		const bool exact_text{ (header->flags & ORZ_FLAG::text_shortest) != 0 };
 
@@ -425,11 +422,18 @@ namespace standard {
 
 		for (int a{}; a < 2; ++a) {
 
-			if (!dspace::decode_axis(info.axis[a], K[a], slack[a], escapes[a], dt, exact_text, out, &escape_values, &escape_cursor))
+			if (!dspace::decode_axis(info.axis[a], fd.K[a], fd.slack[a], escapes[a], fd.dt, exact_text, out, &escape_values, &escape_cursor))
 				return false;
 
 			for (size_t i{}; i < R.size(); ++i)
 				(&R[i].x)[a] = out[sample[i]];
+
+		}
+
+		for (size_t i{}; i < R.size(); ++i) {
+
+			R[i].delta = fd.delta[i];
+			R[i].keys = fd.keys[i] ^ ((fd.keys[i] >> 2) & 3);
 
 		}
 

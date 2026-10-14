@@ -169,14 +169,6 @@ struct _key_data_constructor {
 
 	}
 
-	void tick_std(u32 keys) {
-
-		keys ^= (keys >> 2) & 3;
-
-		tick(keys);
-
-	}
-
 };
 
 struct _orz_construct {
@@ -262,12 +254,13 @@ struct _orz_construct {
 
 	void write(const char* output_file, const _key_data_constructor& kd) {
 
-		add_osr_parts(kd);
+		add_osr_parts();
+		add_key_stream(kd);
 		finish(output_file);
 
 	}
 
-	void add_osr_parts(const _key_data_constructor& kd) {
+	void add_osr_parts() {
 
 		const auto& st{ *state };
 
@@ -305,58 +298,58 @@ struct _orz_construct {
 		add_marked(orz_tag::osr_after_life, st.after_life);
 		add_marked(orz_tag::osr_tail, st.tail);
 
-		{
+	}
 
-			bit_stream key_data{};
+	void add_key_stream(const _key_data_constructor& kd) {
 
-			u32 active_flags{};
+		bit_stream key_data{};
 
-			for (size_t i{}; i < kd.key_sustain.size(); ++i)
-				active_flags |= (kd.key_sustain[i].size() > 1) << i;
+		u32 active_flags{};
 
-			add_to_u8(key_data.data, active_flags);
+		for (size_t i{}; i < kd.key_sustain.size(); ++i)
+			active_flags |= (kd.key_sustain[i].size() > 1) << i;
 
-			auto& o{ key_data.data };
+		add_to_u8(key_data.data, active_flags);
 
-			for (const auto& ks : kd.key_sustain) {
+		auto& o{ key_data.data };
 
-				if (ks.size() <= 1)
+		for (const auto& ks : kd.key_sustain) {
+
+			if (ks.size() <= 1)
+				continue;
+
+			for (const u32 v : ks) {
+
+				if (v < 255) {
+
+					o.push_back((u8)v);
+
 					continue;
-
-				for (const u32 v : ks) {
-
-					if (v < 255) {
-
-						o.push_back((u8)v);
-
-						continue;
-					}
-
-					o.push_back(255);
-
-					if (v < 65535) {
-
-						o.push_back(u8(v));
-						o.push_back(u8(v >> 8));
-
-						continue;
-					}
-
-					o.push_back(255);
-					o.push_back(255);
-
-					add_to_u8(o, v);
-
 				}
 
-				if (ks.size() & 1)
-					o.push_back(0);
+				o.push_back(255);
+
+				if (v < 65535) {
+
+					o.push_back(u8(v));
+					o.push_back(u8(v >> 8));
+
+					continue;
+				}
+
+				o.push_back(255);
+				o.push_back(255);
+
+				add_to_u8(o, v);
 
 			}
 
-			add_compress_stream(orz_tag::key_bit_stream, key_data, comp::composite_key_prop());
+			if (ks.size() & 1)
+				o.push_back(0);
 
 		}
+
+		add_compress_stream(orz_tag::key_bit_stream, key_data, comp::composite_key_prop());
 
 	}
 
@@ -455,7 +448,7 @@ void encode_replay(const char* output_file, _osr& r, const u32 flags, orz_state&
 	if ((flags & ORZ_FLAG::gamemode_fruits) && !relax)
 		return fruits::encode(output_file, r, flags, state);
 
-	standard::encode(output_file, r, flags, state);
+	standard::encode(output_file, r, relax ? flags | ORZ_FLAG::relax : flags, state);
 }
 
 bool orz_round_trip_ok(const std::vector<u8>& orz, const std::string& want);

@@ -72,6 +72,8 @@ enum ORZ_FLAG {
 	taiko_keys = 1 << 9, // osu!taiko positions from the keys, rc time
 	fruits_catcher = 1 << 10, // catcher positions against a movement prediction
 
+	relax = 1 << 11, // relax replay: osu!standard frame times use the replay's own delta table, relax priors
+
 };
 
 enum ORZ_OPTION : u32 {
@@ -120,6 +122,8 @@ enum class orz_tag : u8 {
 	fruits_time_rc,
 	fruits_x_rc,
 	fruits_escape,
+
+	std_frames, // osu!standard keys, times, repeat flags, moves and slack (orz_frames.h)
 
 };
 
