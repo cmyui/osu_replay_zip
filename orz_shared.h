@@ -511,7 +511,72 @@ u32 read_bucket(const _bit_view input, size_t& i, const T... bits) {
 	return result + v - 1;
 }
 
+template<u32 LENGTH_BITS, u32 FROM>
+void write_length_bucket(u32 value, bit_stream& output) {
+
+	constexpr u32 ESCAPE{ (1u << LENGTH_BITS) - 1 };
+	constexpr u32 REST_BITS{ (u32)std::bit_width(32u - ESCAPE) };
+
+	static_assert(FROM + ESCAPE <= 33);
+
+	const u32 length{ (u32)std::bit_width(value) };
+	const u32 code{ std::min(length - FROM, ESCAPE) };
+
+	for (u32 k{}; k < LENGTH_BITS; ++k)
+		output.push_back((code >> k) & 1);
+
+	if (code == ESCAPE) {
+
+		const u32 rest{ length < FROM ? length : length - ESCAPE };
+
+		for (u32 k{}; k < REST_BITS; ++k)
+			output.push_back((rest >> k) & 1);
+
+	}
+
+	for (u32 k{}; k + 1 < length; ++k)
+		output.push_back((value >> k) & 1);
+
+}
+
+template<u32 LENGTH_BITS, u32 FROM>
+u32 read_length_bucket(const _bit_view input, size_t& i) {
+
+	constexpr u32 ESCAPE{ (1u << LENGTH_BITS) - 1 };
+	constexpr u32 REST_BITS{ (u32)std::bit_width(32u - ESCAPE) };
+
+	const auto max_size{ input.max_size() };
+
+	u32 code{};
+
+	for (u32 k{}; k < LENGTH_BITS && i < max_size; ++k)
+		code |= u32(input[i++] != 0) << k;
+
+	u32 length{ code + FROM };
+
+	if (code == ESCAPE) {
+
+		u32 rest{};
+
+		for (u32 k{}; k < REST_BITS && i < max_size; ++k)
+			rest |= u32(input[i++] != 0) << k;
+
+		length = std::min(rest < FROM ? rest : rest + ESCAPE, 32u);
+
+	}
+
+	u32 value{ length ? 1u << (length - 1) : 0u };
+
+	for (u32 k{}; k + 1 < length && i < max_size; ++k)
+		value |= u32(input[i++] != 0) << k;
+
+	return value;
+}
+
 constexpr u8 ORZ_MAGIC{ 'r' };
+
+// tuned to sessions under around 4.7 hours
+constexpr u32 ORZ_SEED_LENGTH{ 18 };
 
 struct _orz_header {
 	u32 version, flags, frame_count, data_count;
@@ -565,8 +630,8 @@ inline _orz_container read_container(const std::vector<u8>& file) {
 
 	h.seeded = small_read<1>(bs, i) != 0;
 
-	for (int k{}; h.seeded && k < 32; ++k)
-		h.seed |= u32(small_read<1>(bs, i)) << k;
+	if (h.seeded)
+		h.seed = read_length_bucket<3, ORZ_SEED_LENGTH>(bs, i);
 
 	h.frame_count = read_bucket(bs, i, 16);
 	h.data_count = read_bucket(bs, i, 3);

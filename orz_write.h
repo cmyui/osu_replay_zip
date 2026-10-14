@@ -171,8 +171,8 @@ struct _orz_construct {
 
 		h.push_back(state->seed.present);
 
-		for (int k{}; state->seed.present && k < 32; ++k)
-			h.push_back((state->seed.value >> k) & 1);
+		if (state->seed.present)
+			write_length_bucket<3, ORZ_SEED_LENGTH>(state->seed.value, h);
 
 		write_bucket(frame_count, h, 16);
 		write_bucket(data_count, h, 3);
