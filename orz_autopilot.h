@@ -33,8 +33,8 @@ namespace autopilot {
 
 	};
 
-	// GameField.FieldToDisplay then DisplayToField, as the game records the cursor. The game runs on the x87 unit at
-	// double precision, so 1 / ratio is not rounded to a float before it scales.
+	// the field to the screen and back, as the game records the cursor. The game runs on the x87 unit at double precision,
+	// so 1 / ratio is not rounded to a float before it scales.
 	struct _screen {
 
 		float ratio, off[2];
@@ -68,7 +68,7 @@ namespace autopilot {
 		float p[2];
 	};
 
-	// OsuMathHelper.ApplyEasing, InOutCubic
+	// the game's in-out cubic easing, in doubles
 	FORCEINLINE double in_out_cubic(double time, double initial, double change, double duration) {
 
 		if (change == 0 || time == 0 || duration == 0)
@@ -203,7 +203,7 @@ namespace autopilot {
 			return r;
 		}
 
-		// Vector2.Lerp between the knots around t, as InputManager plays a replay
+		// the linear interpolation between the knots around t, as the game plays a replay back
 		void predict(i64 t, float (&out)[2]) {
 
 			const auto it{ std::upper_bound(k.begin(), k.end(), t, [](i64 v, const knot& q) { return v < q.t; }) };
@@ -249,7 +249,7 @@ namespace autopilot {
 
 			if (m.type == kind::ease && m.time <= MAX_EASE_MS && std::abs(t0) < FLOAT_MS && std::abs(t1) < FLOAT_MS) {
 
-				// RulesetOsu.CreateAutoplayReplay: samples from the start every sample_ms (float), the time truncated
+				// the autoplay replay samples an eased move every sample_ms from its start, a float time truncated to whole ms
 				const float end{ (float)t1 };
 
 				for (float time{ (float)t0 + sample_ms }; time < end && budget; time = time + sample_ms, --budget) {
