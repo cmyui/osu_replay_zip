@@ -33,6 +33,15 @@ void add_to_u8(std::vector<u8>& output, const std::vector<T>& input) {
 	memcpy(output.data() + i, input.data(), input.size() * SIZE);
 }
 
+// unsigned leb128, as .osr strings give their length
+void add_uleb128(std::vector<u8>& output, u32 v) {
+
+	for (; v > 0x7f; v >>= 7)
+		output.push_back(u8(v | 0x80));
+
+	output.push_back(u8(v));
+}
+
 std::pair<u32, u32>& unique_add(u32 v, std::vector<std::pair<u32, u32>>& b) {
 
 	for (auto& t : b) {
@@ -169,14 +178,6 @@ struct _key_data_constructor {
 
 	}
 
-	void tick_std(u32 keys) {
-
-		keys ^= (keys >> 2) & 3;
-
-		tick(keys);
-
-	}
-
 };
 
 struct _orz_construct {
@@ -262,20 +263,32 @@ struct _orz_construct {
 
 	void write(const char* output_file, const _key_data_constructor& kd) {
 
-		add_osr_parts(kd);
+		add_osr_parts();
+		add_key_stream(kd);
 		finish(output_file);
 
 	}
 
-	void add_osr_parts(const _key_data_constructor& kd) {
+	void add_osr_parts() {
 
 		const auto& st{ *state };
 
-		if (st.osr_header.size())
-			add_stream(orz_tag::osr_header, st.osr_header.data(), st.osr_header.size());
+		{ // header, bytes after the life bar, bytes after the replay data: each a leb128 size, then the bytes
 
-		if (st.seed.present)
-			add_stream(orz_tag::seed, &st.seed.value, sizeof(st.seed.value));
+			std::vector<u8> parts;
+
+			for (const auto* bytes : { &st.osr_header, &st.after_life, &st.tail }) {
+
+				add_uleb128(parts, (u32)bytes->size());
+
+				parts.insert(parts.end(), bytes->begin(), bytes->end());
+
+			}
+
+			if (parts.size() > 3)
+				add_stream(orz_tag::osr_parts, parts.data(), parts.size());
+
+		}
 
 		if (st.replay_data.present)
 			add_stream(orz_tag::osr_replay_data, st.replay_data.bytes.data(), st.replay_data.bytes.size());
@@ -288,75 +301,58 @@ struct _orz_construct {
 
 		}
 
-		// verbatim chunks after a 0x01 marker byte, so an empty chunk is still a stream
-		const auto add_marked = [&](orz_tag tag, const _osr_bytes& chunk) {
+	}
 
-			if (!chunk.present)
-				return;
+	void add_key_stream(const _key_data_constructor& kd) {
 
-			std::vector<u8> bytes{ 0x01 };
+		bit_stream key_data{};
 
-			bytes.insert(bytes.end(), chunk.bytes.begin(), chunk.bytes.end());
+		u32 active_flags{};
 
-			add_stream(tag, bytes.data(), bytes.size());
+		for (size_t i{}; i < kd.key_sustain.size(); ++i)
+			active_flags |= (kd.key_sustain[i].size() > 1) << i;
 
-		};
+		add_to_u8(key_data.data, active_flags);
 
-		add_marked(orz_tag::osr_after_life, st.after_life);
-		add_marked(orz_tag::osr_tail, st.tail);
+		auto& o{ key_data.data };
 
-		{
+		for (const auto& ks : kd.key_sustain) {
 
-			bit_stream key_data{};
+			if (ks.size() <= 1)
+				continue;
 
-			u32 active_flags{};
+			for (const u32 v : ks) {
 
-			for (size_t i{}; i < kd.key_sustain.size(); ++i)
-				active_flags |= (kd.key_sustain[i].size() > 1) << i;
+				if (v < 255) {
 
-			add_to_u8(key_data.data, active_flags);
+					o.push_back((u8)v);
 
-			auto& o{ key_data.data };
-
-			for (const auto& ks : kd.key_sustain) {
-
-				if (ks.size() <= 1)
 					continue;
-
-				for (const u32 v : ks) {
-
-					if (v < 255) {
-
-						o.push_back((u8)v);
-
-						continue;
-					}
-
-					o.push_back(255);
-
-					if (v < 65535) {
-
-						o.push_back(u8(v));
-						o.push_back(u8(v >> 8));
-
-						continue;
-					}
-
-					o.push_back(255);
-					o.push_back(255);
-
-					add_to_u8(o, v);
-
 				}
 
-				if (ks.size() & 1)
-					o.push_back(0);
+				o.push_back(255);
+
+				if (v < 65535) {
+
+					o.push_back(u8(v));
+					o.push_back(u8(v >> 8));
+
+					continue;
+				}
+
+				o.push_back(255);
+				o.push_back(255);
+
+				add_to_u8(o, v);
 
 			}
 
-			add_compress_stream(orz_tag::key_bit_stream, key_data, comp::composite_key_prop());
+			if (ks.size() & 1)
+				o.push_back(0);
 
 		}
+
+		add_compress_stream(orz_tag::key_bit_stream, key_data, comp::composite_key_prop());
 
 	}
 
@@ -400,14 +396,19 @@ struct _orz_construct {
 		for (int k{}; k < 32; ++k)
 			h.push_back((crc >> k) & 1);
 
+		h.push_back(state->seed.present);
+
+		for (int k{}; state->seed.present && k < 32; ++k)
+			h.push_back((state->seed.value >> k) & 1);
+
 		write_bucket(frame_count, h, 16);
-		write_bucket(data_count, h, 5);
+		write_bucket(data_count, h, 3);
 
 		for (size_t i{}; i < data_count; ++i) {
 
 			const auto& dt{ data_table[i] };
 
-			write_bucket((u32)tag_table[i], h, 5);
+			write_bucket((u32)tag_table[i], h, 4);
 			h.push_back(dt.is_compressed);
 			write_bucket(dt.size, h);
 
@@ -455,7 +456,7 @@ void encode_replay(const char* output_file, _osr& r, const u32 flags, orz_state&
 	if ((flags & ORZ_FLAG::gamemode_fruits) && !relax)
 		return fruits::encode(output_file, r, flags, state);
 
-	standard::encode(output_file, r, flags, state);
+	standard::encode(output_file, r, relax ? flags | ORZ_FLAG::relax : flags, state);
 }
 
 bool orz_round_trip_ok(const std::vector<u8>& orz, const std::string& want);
@@ -589,7 +590,7 @@ static void encode_osr(const char* in_file, const char* out_file, u32 flags, orz
 
 		header_bytes.assign(raw_file.begin(), raw_file.begin() + life_start);
 
-		state.after_life = { true, std::vector<u8>(raw_file.begin() + life_end, raw_file.begin() + pos) };
+		state.after_life.assign(raw_file.begin() + life_end, raw_file.begin() + pos);
 
 		if (!state.life.present && life_end > life_start && raw_file[life_start] != 0)
 			state.life = { true, std::string() };
@@ -608,7 +609,7 @@ static void encode_osr(const char* in_file, const char* out_file, u32 flags, orz
 
 		if (compressed <= lzma_size) {
 
-			state.tail = { true, std::vector<u8>(raw_file.begin() + pos + compressed, raw_file.end()) };
+			state.tail.assign(raw_file.begin() + pos + compressed, raw_file.end());
 			lzma_size = compressed;
 
 		}

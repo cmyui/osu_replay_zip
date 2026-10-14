@@ -60,6 +60,40 @@ namespace mania { void decode(const _orz_header* header, const _stream_map& stre
 namespace taiko { void decode(const _orz_header* header, const _stream_map& stream_data, std::vector<_osr_frame>& R); }
 namespace fruits { u32 decode(const _orz_header* header, const _stream_map& stream_data, std::vector<_osr_frame>& R); }
 
+// the parts of an osr_parts stream (see _orz_construct::add_osr_parts), empty when absent or damaged
+struct _osr_parts {
+
+	std::span<const u8> part[3]; // header, after the life bar, after the replay data
+
+	explicit _osr_parts(std::span<const u8> data) {
+
+		size_t at{};
+
+		for (auto& p : part) {
+
+			u32 size{};
+
+			for (int shift{}; at < data.size() && shift < 35; shift += 7) {
+
+				size |= u32(data[at] & 0x7f) << shift;
+
+				if (!(data[at++] & 0x80))
+					break;
+
+			}
+
+			if (size > data.size() - at)
+				break;
+
+			p = data.subspan(at, size);
+			at += size;
+
+		}
+
+	}
+
+};
+
 struct _decoded_orz {
 	_stream_map streams;
 	std::vector<_osr_frame> frames;
@@ -158,19 +192,12 @@ static bool decode_frames(const std::vector<u8>& raw_bytes, const u32 options, _
 		taiko::decode(header, stream_data, R);
 	else if (header->flags & ORZ_FLAG::fruits_catcher)
 		fruits::decode(header, stream_data, R);
-	else {
-
-		for (auto& f : R)
-			f.keys ^= (f.keys >> 2) & 3;
-
-		if (!standard::decode(header, stream_data, R))
-			return false;
-
-	}
+	else if (!standard::decode(header, stream_data, R))
+		return false;
 
 	// readd the closing seed frame
-	if (const auto& seed{ stream_data[orz_tag::seed] }; seed.size() == 4)
-		R.push_back({ -12345, 0.f, 0.f, *(u32*)seed.data() });
+	if (header->seeded)
+		R.push_back({ -12345, 0.f, 0.f, header->seed });
 
 	if (header->flags & ORZ_FLAG::replay_verbatim) {
 
@@ -246,6 +273,8 @@ static bool decode_to_osr(const char* input_file, const char* output_file, const
 
 	const auto& [stream_data, R, flags] { decoded };
 
+	const _osr_parts parts{ stream_data[orz_tag::osr_parts] };
+
 	const std::vector<u8> compressed_string{ (flags & ORZ_FLAG::replay_verbatim) ?
 		stream_data[orz_tag::osr_replay_data] :
 		compress_osr_string(replay_text(R, flags, stream_data), (options & DECODE_OSU_STABLE_LZMA) != 0)
@@ -255,9 +284,9 @@ static bool decode_to_osr(const char* input_file, const char* output_file, const
 
 	if (flags & ORZ_FLAG::has_osr_header) {
 
-		// header chunk, life graph, chunk up to the replay data length (stored after a 0x01 marker byte)
+		// header chunk, life graph, chunk up to the replay data length
 
-		const auto& header{ stream_data[orz_tag::osr_header] };
+		const auto& header{ parts.part[0] };
 
 		add_to_u8(final_file_output, header.data(), header.size());
 
@@ -267,26 +296,14 @@ static bool decode_to_osr(const char* input_file, const char* output_file, const
 
 			final_file_output.push_back(0x0b);
 
-			for (u32 len{ (u32)text.size() }; ; ) {
-
-				const u8 c{ u8(len & 0x7f) };
-
-				len >>= 7;
-
-				final_file_output.push_back(len ? c | 0x80 : c);
-
-				if (!len)
-					break;
-
-			}
+			add_uleb128(final_file_output, (u32)text.size());
 
 			final_file_output.insert(final_file_output.end(), text.begin(), text.end());
 
 		} else
 			final_file_output.push_back(0x00);
 
-		if (const auto& after_life{ stream_data[orz_tag::osr_after_life] }; after_life.size())
-			final_file_output.insert(final_file_output.end(), after_life.begin() + 1, after_life.end());
+		final_file_output.insert(final_file_output.end(), parts.part[1].begin(), parts.part[1].end());
 
 		add_to_u8(final_file_output, compressed_string.size());
 
@@ -295,8 +312,7 @@ static bool decode_to_osr(const char* input_file, const char* output_file, const
 	add_to_u8(final_file_output, compressed_string);
 
 	// bytes after the replay data (online score id, extra data), verbatim
-	if (const auto& tail{ stream_data[orz_tag::osr_tail] }; tail.size())
-		final_file_output.insert(final_file_output.end(), tail.begin() + 1, tail.end());
+	final_file_output.insert(final_file_output.end(), parts.part[2].begin(), parts.part[2].end());
 
 	return write_file(output_file, final_file_output);
 }

@@ -336,29 +336,48 @@ namespace standard {
 		return true;
 	}
 
-	static size_t axis_cost(const dspace::axis_params& p, const dspace::axis_streams& a, std::span<const int> dt, int axis,
-		const orz_state& state) {
+	// rough coded size of an axis in bits, for comparing models: Elias gamma lengths of the move predictor's residuals,
+	// the slack, the gaps between escapes and their values
+	static size_t axis_cost(const dspace::axis_streams& a, std::span<const int> dt, int axis, bool exact_text) {
 
-		size_t total{};
+		const auto gamma = [](u64 v) { return 1 + 2 * (size_t)std::bit_width(v); };
 
-		if (a.escapes.size()) {
+		size_t bits{};
 
-			bit_stream index{}, values{};
-			std::vector<u32> frames;
+		dspace::move_predictor mp{};
 
-			for (const auto& [f, v] : a.escapes)
-				frames.push_back(f);
+		for (size_t i{}; i < a.K.size(); ++i) {
 
-			dspace::write_escape_index(frames, index);
+			const i64 d{ a.K[i] - (i ? a.K[i - 1] : 0) };
+			const i64 pr{ mp.pred(axis, dt[i]) };
 
-			for (size_t j{}; j < a.escapes.size(); ++j)
-				dspace::write_escape_value(a.escapes[j].second, a.escape_pred[j], values, state.exact_text);
+			bits += gamma((u64)std::abs(d - pr));
 
-			total += index.data.size() + values.data.size();
+			mp.push(axis, d, pr);
+			mp.advance(dt[i]);
 
 		}
 
-		return total + dspace::moves_rc_bytes(p, a, dt, axis);
+		for (const int s : a.slack)
+			bits += s ? gamma((u64)std::abs(s)) + 1 : 0;
+
+		u32 prev{};
+
+		for (size_t j{}; j < a.escapes.size(); ++j) {
+
+			i64 diff{};
+
+			const bool near{ exact_text ?
+				dspace::escape_ulps(a.escapes[j].second, a.escape_pred[j], diff) :
+				dspace::escape_digits(a.escapes[j].second, a.escape_pred[j], diff)
+			};
+
+			bits += gamma(a.escapes[j].first - prev) + (near ? gamma(rc::zz(diff)) : 33);
+			prev = a.escapes[j].first;
+
+		}
+
+		return bits;
 	}
 
 	// common window sizes, tried for reversing the playfield transform
@@ -1211,7 +1230,7 @@ namespace standard {
 			if (st.escapes.size() * 2 > vals.size())
 				continue;
 
-			const size_t cost{ axis_cost(q, st, dt, axis, state) };
+			const size_t cost{ axis_cost(st, dt, axis, state.exact_text) };
 
 			if (cost < chosen_cost) {
 

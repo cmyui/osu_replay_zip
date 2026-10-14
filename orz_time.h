@@ -58,55 +58,15 @@ namespace frame_time {
 
 	struct _time_grid {
 
-		u64 rate{ 1 };
 		_grid_period period{ GRID_PERIODS[0] };
 
-		_time_grid(const std::vector<int>& table, u32 grid) {
-
-			period = GRID_PERIODS[grid < GRID_PERIOD_COUNT ? grid : 0];
-
-			if (table.empty())
-				return;
-
-			double step{ (double)table[0] };
-
-			if (table.size() > 1 && std::abs((i64)table[0] - table[1]) == 1)
-				step = ((i64)table[0] + table[1]) * 0.5;
-
-			rate = step < 14 ? 0 : step <= 20 ? 1 : 2;
-
-		}
+		explicit _time_grid(u32 grid) : period{ GRID_PERIODS[grid < GRID_PERIOD_COUNT ? grid : 0] } {}
 
 		u64 bin(i64 now) const {
 			return grid_phase(now, period);
 		}
 
 	};
-
-	inline u64 osu_ctx(const std::vector<_osr_frame>& R, size_t i, i64 now, const _time_grid& time_grid) {
-
-		if (i < 2)
-			return 0;
-
-		const int a{ R[i].keys != R[i - 1].keys }, b{ R[i - 1].keys != R[i - 2].keys };
-
-		if (i >= 3 && (u32)R[i - 1].delta <= 1 && (u32)R[i - 2].delta <= 1) {
-
-			size_t j{ i - 1 };
-			u64 run{}, prev_run{};
-
-			for (; j > 0 && R[j].delta == 0 && run < 7; --j)
-				++run;
-
-			if (j > 0 && R[j].delta != 0)
-				for (--j; j > 0 && R[j].delta == 0 && prev_run < 7; --j)
-					++prev_run;
-
-			return 300 + ((u64)a * 8 + run) * 8 + prev_run;
-		}
-
-		return ((u64)(a * 2 + b) * 25 + time_grid.bin(now)) * 3 + time_grid.rate;
-	}
 
 	FORCEINLINE u64 grid_ctx(bool changed, i64 now, size_t i, const _time_grid& time_grid) {
 		return i < 2 ? 0 : (u64)changed * 25 + time_grid.bin(now);
@@ -202,9 +162,8 @@ namespace frame_time {
 		return best;
 	}
 
-	inline void write_table(_orz_construct& orz, const std::vector<int>& table, u32 grid) {
-
-		bit_stream t{};
+	// the delta table and time grid, at the front of the stream holding the times
+	inline void write_table(bit_stream& t, const std::vector<int>& table, u32 grid) {
 
 		small_write<5>((u32)table.size(), t);
 
@@ -217,15 +176,10 @@ namespace frame_time {
 		for (int b{}; b < 3; ++b)
 			t.push_back((grid >> b) & 1);
 
-		orz.add_stream(orz_tag::time_delta_table, t.data.data(), t.data.size());
-
 	}
 
-	inline std::vector<int> read_table(const _stream_map& stream_data, u32& grid) {
-
-		const _bit_view t{ stream_data[orz_tag::time_delta_table] };
-
-		size_t bit{};
+	// from bit `bit` of t, which ends past it
+	inline std::vector<int> read_table(const _bit_view t, size_t& bit, u32& grid) {
 
 		std::vector<int> table(std::min<size_t>(small_read<5>(t, bit), t.max_size() / 6));
 
@@ -245,7 +199,7 @@ namespace frame_time {
 	}
 	
 	template<typename Ctx>
-	void write_indices(_orz_construct& orz, orz_tag tag, kind k, const std::vector<int>& table, std::span<const int> delta, Ctx ctx) {
+	std::vector<u8> write_indices(kind k, const std::vector<int>& table, std::span<const int> delta, Ctx ctx) {
 
 		rc::rc_encoder e{};
 		rc::value_coder coder{ make_coder(k) };
@@ -262,9 +216,7 @@ namespace frame_time {
 
 		}
 
-		const auto& bytes{ e.finish() };
-
-		orz.add_stream(tag, bytes.data(), bytes.size());
+		return e.finish();
 	}
 	
 	template<typename Ctx, typename Set>
@@ -293,14 +245,20 @@ namespace frame_time {
 		const auto table{ build_table(delta) };
 		const u32 grid{ pick_grid(delta) };
 
-		write_table(orz, table, grid);
+		bit_stream t{};
 
-		const _time_grid time_grid{ table, grid };
+		write_table(t, table, grid);
 
-		write_indices(orz, tag, k, table, delta, [&](size_t i, i64 now) {
+		const _time_grid time_grid{ grid };
+
+		const auto indices{ write_indices(k, table, delta, [&](size_t i, i64 now) {
 
 			return grid_ctx(changed[i], now, i, time_grid);
-		});
+		}) };
+
+		add_to_u8(t.data, indices);
+
+		orz.add_stream(tag, t.data.data(), t.data.size());
 
 	}
 
@@ -308,12 +266,15 @@ namespace frame_time {
 
 		std::vector<int> delta(changed.size());
 
+		const auto& data{ stream_data[tag] };
+
+		size_t bit{};
 		u32 grid{};
 
-		const auto table{ read_table(stream_data, grid) };
-		const _time_grid time_grid{ table, grid };
+		const auto table{ read_table(_bit_view{ data }, bit, grid) };
+		const _time_grid time_grid{ grid };
 
-		read_indices(stream_data[tag], k, table, delta.size(),
+		read_indices(std::span{ data }.subspan(std::min(data.size(), (bit + 7) / 8)), k, table, delta.size(),
 			[&](size_t i, i64 now) {
 
 				return grid_ctx(changed[i], now, i, time_grid);
