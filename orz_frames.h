@@ -21,6 +21,9 @@ namespace frames {
 	};
 	constexpr u32 GLOBAL_DELTA_COUNT{ (u32)(sizeof(GLOBAL_DELTAS) / sizeof(int)) };
 
+	// relax replays code a delta as its place in their own table, the unary covers this many entries
+	constexpr u32 RELAX_LISTED{ 64 };
+
 	constexpr int KEY_BITS{ 5 }; // M1 M2 K1 K2 smoke (folded like the key stream), higher bits are escaped
 
 	// valid moves are far below 2^40 and K far below 2^50, only damaged files reach these
@@ -47,16 +50,18 @@ namespace frames {
 
 		cm::model keys_changed, keys_bits, keys_high, time, repeat, move, move_bits, slack;
 
+		// tables follow the replay's length up to a cap (the frame count of a file to decode is untrusted),
+		// and are larger when training priors
 		void init(size_t frames, bool record_keys = false) {
 
-			const int b{ (int)std::bit_width(frames) };
+			const int b{ (int)std::bit_width(frames) }, extra{ record_keys ? 4 : 0 };
 
 			// single decision models: a counter per line; time / move / slack: a line of counters per context
-			keys_changed.init(7, std::clamp(b + 4, 16, 24), 1, 64, 64, record_keys);
-			keys_bits.init(6, std::clamp(b + 2, 14, 22), 1, 64, 64, record_keys);
+			keys_changed.init(7, std::clamp(b + 4, 16, 22 + extra), 1, 64, 64, record_keys);
+			keys_bits.init(6, std::clamp(b + 2, 14, 20 + extra), 1, 64, 64, record_keys);
 			keys_high.init(1, 8, 1, 1, 1, record_keys);
-			repeat.init(7, std::clamp(b + 4, 16, 24), 1, 64, 64, record_keys);
-			time.init(7, std::clamp(b, 12, 20), 64, 64 * 3, 64 * 3, record_keys);
+			repeat.init(7, std::clamp(b + 4, 16, 22 + extra), 1, 64, 64, record_keys);
+			time.init(7, std::clamp(b, 12, 16 + extra), 64, 64 * 3, 64 * 3, record_keys);
 
 			init_moves(frames, 8, record_keys);
 
@@ -65,10 +70,10 @@ namespace frames {
 		// move_inputs below 8 gives a cheaper move model (device model selection estimates)
 		void init_moves(size_t positions, int move_inputs, bool record_keys = false) {
 
-			const int b{ (int)std::bit_width(positions) };
+			const int b{ (int)std::bit_width(positions) }, extra{ record_keys ? 4 : 0 };
 
-			move.init(move_inputs, std::clamp(b + 3, 12, 22), 16, 32 * 4, 32 * 32, record_keys);
-			move_bits.init(4, std::clamp(b + 2, 12, 20), 1, 8 * 4, 8 * 32, record_keys);
+			move.init(move_inputs, std::clamp(b + 3, 12, 19 + extra), 16, 32 * 4, 32 * 32, record_keys);
+			move_bits.init(4, std::clamp(b + 2, 12, 20 + extra), 1, 8 * 4, 8 * 32, record_keys);
 			slack.init(3, std::clamp(b - 2, 10, 16), 16, 64, 64, record_keys);
 
 		}
@@ -466,10 +471,16 @@ namespace frames {
 
 				if (side.relax) {
 
-					const u32 n{ (u32)side.table.size() };
+					// the first RELAX_LISTED entries in unary, later ones (rare) as an escaped index
+					const u32 n{ (u32)side.table.size() }, listed{ std::min(n, RELAX_LISTED) };
 					const u32 want{ encoding ? (u32)(std::find(side.table.begin(), side.table.end(), fd.delta[f]) - side.table.begin()) : 0u };
 
-					d = n ? side.table[std::min(place(n, want, true), n - 1)] : 0;
+					u32 at{ place(listed, want, listed == n) };
+
+					if (at == listed && listed < n)
+						at = listed + (u32)(gamma(c, encoding ? want - listed + 1 : 0) - 1);
+
+					d = n ? side.table[std::min(at, n - 1)] : 0;
 
 				} else {
 
