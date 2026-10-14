@@ -55,7 +55,7 @@ int main(int argc, char** argv) {
 		u32 grid{};
 		std::span<const u8> rest;
 
-		if (!standard::read_head(decoded.streams[orz_tag::std_frames], side.table, grid, info, rest))
+		if (!standard::read_head(decoded.streams[orz_tag::frames], side.table, grid, info, rest))
 			continue;
 
 		side.axis = info.axis;

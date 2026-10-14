@@ -67,10 +67,11 @@ enum ORZ_FLAG {
 	replay_verbatim = 1 << 6,
 
 	text_shortest = 1 << 7, // floats are 'shortest round-trip' (newer .NET, osu!lazer)
-	mania_columns = 1 << 8, // osu!mania column / scroll speed streams
 
-	taiko_keys = 1 << 9, // osu!taiko positions from the keys, rc time
-	fruits_catcher = 1 << 10, // catcher positions against a movement prediction
+	// frames of the other modes (orz_modes.h), else osu!standard's (orz_frames.h)
+	mania_columns = 1 << 8, // osu!mania: held columns in x, scroll speed in y
+	taiko_keys = 1 << 9, // osu!taiko: positions from the keys
+	fruits_catcher = 1 << 10, // osu!catch: catcher positions against a movement prediction
 
 	relax = 1 << 11, // relax replay: osu!standard frame times use the replay's own delta table, relax priors
 
@@ -93,24 +94,12 @@ constexpr u32 OSR_MOD_RELAX{ 1 << 7 };
 
 enum class orz_tag : u8 {
 
-	key_bit_stream = 0,
+	// delta table and the mode's model, then the context mixed frames: orz_frames.h (osu!standard), orz_modes.h (other modes)
+	frames = 0,
 
 	osr_parts, // .osr bytes kept as they are: the header, what follows the life bar, what follows the replay data
 	life_bar,
 	osr_replay_data,
-
-	// *_time_rc streams start with the delta table (frame_time::write_table)
-	mania_time_rc,
-	mania_scroll_speed,
-
-	taiko_time_rc,
-	taiko_escape,
-
-	fruits_time_rc,
-	fruits_x_rc,
-	fruits_escape,
-
-	std_frames, // osu!standard: delta table, device model, then keys, times, repeat flags, moves, escapes and slack (orz_frames.h)
 
 };
 
@@ -531,18 +520,11 @@ struct _orz_header {
 	u32 seed; // of the closing -12345 frame
 };
 
-struct _orz_data_block {
-	u32 size;
-	bool is_compressed;
-	u8 props;
-	u32 raw_size;
-};
-
 struct _orz_container {
 
 	struct _stream {
 		u8 tag;
-		_orz_data_block block;
+		u32 size;
 		size_t offset;
 	};
 
@@ -560,7 +542,7 @@ inline _orz_container read_container(const std::vector<u8>& file) {
 	if (file.size() < 2 || file[0] != ORZ_MAGIC)
 		return c;
 
-	// the header is at most a few KB (ORZ_MAX_STREAMS streams of ~90 bits)
+	// the header is at most a few KB (ORZ_MAX_STREAMS streams of ~50 bits)
 	const _bit_view bs{ std::span{ file }.subspan(1, std::min<size_t>(file.size() - 1, 4096)) };
 
 	size_t i{};
@@ -596,23 +578,9 @@ inline _orz_container read_container(const std::vector<u8>& file) {
 
 	for (auto& s : c.streams) {
 
-		const u32 tag{ read_bucket(bs, i, 4) };
+		const u32 tag{ read_bucket(bs, i, 3) };
 
-		s.block.is_compressed = small_read<1>(bs, i) != 0;
-		s.block.size = read_bucket(bs, i);
-
-		if (s.block.is_compressed) {
-
-			const u32 props{ read_bucket(bs, i, 8) };
-
-			s.block.raw_size = read_bucket(bs, i);
-
-			if (props > 255 || s.block.raw_size > ORZ_MAX_STREAM)
-				return c;
-
-			s.block.props = (u8)props;
-
-		}
+		s.size = read_bucket(bs, i);
 
 		if (tag > 255)
 			return c;
@@ -630,11 +598,11 @@ inline _orz_container read_container(const std::vector<u8>& file) {
 
 	for (auto& s : c.streams) {
 
-		if (s.block.size > file.size() - offset)
+		if (s.size > file.size() - offset)
 			return c;
 
 		s.offset = offset;
-		offset += s.block.size;
+		offset += s.size;
 
 	}
 

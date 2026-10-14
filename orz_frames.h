@@ -55,7 +55,7 @@ namespace frames {
 
 		// tables follow the replay's length up to a cap (the frame count of a file to decode is untrusted),
 		// and are larger when training priors. The keys and time models, which every mode uses:
-		void init_keys_time(size_t frames, bool record_keys = false) {
+		void init_keys_time(size_t frames, bool record_keys = false, int time_inputs = 6) {
 
 			const int b{ (int)std::bit_width(frames) }, extra{ record_keys ? 4 : 0 };
 
@@ -63,7 +63,7 @@ namespace frames {
 			keys_changed.init(7, std::clamp(b + 4, 16, 22 + extra), 1, 64, 64, record_keys);
 			keys_bits.init(6, std::clamp(b + 2, 14, 20 + extra), 1, 64, 64, record_keys);
 			keys_high.init(1, 8, 1, 1, 1, record_keys);
-			time.init(6, std::clamp(b, 12, 16 + extra), 64, 64 * 3, 64 * 3, record_keys);
+			time.init(time_inputs, std::clamp(b, 12, 16 + extra), 64, 64 * 3, 64 * 3, record_keys);
 
 		}
 
@@ -303,10 +303,10 @@ namespace frames {
 		const std::vector<int>& table;
 		int zero_run{}, prev_zero_run{}, one_run{};
 
-		// the delta of frame f = past.size(). kc / kc1: keys changed in this / the previous frame, r: the mode's flag of each
-		// of the last three frames (2 before the first)
+		// the delta of frame f = past.size(). kc / kc1: keys changed in this / the previous frame, mode_ctx: the mode's own
+		// context, below 27, extra: a seventh context for a model with seven inputs
 		template<typename Coder>
-		int code(Coder& c, cm::model& m, std::span<const int> past, int want, u64 phase, u64 kc, u64 kc1, const u64 (&r)[3]) {
+		int code(Coder& c, cm::model& m, std::span<const int> past, int want, u64 phase, u64 kc, u64 kc1, u64 mode_ctx, u64 extra = 0) {
 
 			const size_t f{ past.size() };
 			const u64 d1{ f >= 1 ? delta_bucket(past[f - 1]) : 50 }, d2{ f >= 2 ? delta_bucket(past[f - 2]) : 50 },
@@ -319,13 +319,14 @@ namespace frames {
 				span += std::max(0, past[j - 1]);
 
 			const u64 rate{ (u64)std::min<i64>(span * 4 / std::max(count, 1), 127) };
-			const u64 ctx[6]{
+			const u64 ctx[7]{
 				(d1 * 64 + d2) * 3 + kc,
 				((d1 * 64 + d2) * 64 + d3) * 64 + d4,
 				(((u64)std::min(zero_run, 15) * 16 + (u64)std::min(prev_zero_run, 15)) * 16 + (u64)std::min(one_run, 15)) * 3 + kc,
 				((phase * 64 + d1) * 3 + kc) * 2 + kc1,
-				((d1 * 3 + r[0]) * 3 + r[1]) * 3 + r[2],
+				d1 * 27 + mode_ctx,
 				(rate * 64 + d1) * 3 + kc,
+				extra,
 			};
 
 			const size_t regime{ d1 <= 5 ? 0u : d1 <= 13 ? 1u : 2u };
@@ -626,7 +627,8 @@ namespace frames {
 			{ // time
 
 				const u64 kc1{ f ? (u64)(fd.keys[f - 1] != (f > 1 ? fd.keys[f - 2] : 0u)) : 0 };
-				const u64 r[3]{ f >= 1 ? (u64)fd.repeated[f - 1] : 2, f >= 2 ? (u64)fd.repeated[f - 2] : 2, f >= 3 ? (u64)fd.repeated[f - 3] : 2 };
+				// the repeat flags of the last three frames (2 before the first)
+				const u64 r{ ((f >= 1 ? (u64)fd.repeated[f - 1] : 2) * 3 + (f >= 2 ? (u64)fd.repeated[f - 2] : 2)) * 3 + (f >= 3 ? (u64)fd.repeated[f - 3] : 2) };
 
 				fd.delta[f] = time.code(c, M.time, std::span{ fd.delta }.first(f), encoding ? fd.delta[f] : 0, phase, changed, kc1, r);
 

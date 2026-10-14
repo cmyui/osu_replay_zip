@@ -115,7 +115,7 @@ namespace standard {
 		for (int a{}; a < 2; ++a)
 			p.st[a] = dspace::encode_axis_model(m.axis[a], vals[a], dt, state.exact_text);
 
-		// std_frames: delta table and device model, from the next byte the context mixed frames and escape values
+		// frames: delta table and device model, from the next byte the context mixed frames and escape values
 		bit_stream head{};
 
 		frame_time::write_table(head, shared.table, shared.grid);
@@ -143,7 +143,7 @@ namespace standard {
 
 		add_to_u8(head.data, frames::encode(fd, side, shared.delta.size(), values, state.exact_text));
 
-		p.streams.add_stream(orz_tag::std_frames, head.data.data(), head.data.size());
+		p.streams.add_stream(orz_tag::frames, head.data.data(), head.data.size());
 
 		return p;
 	}
@@ -356,7 +356,7 @@ namespace standard {
 
 	}
 	
-	// the head of std_frames: delta table, time grid and device model; rest: what follows from the next byte
+	// the head of the frames stream: delta table, time grid and device model; rest: what follows from the next byte
 	inline bool read_head(std::span<const u8> data, std::vector<int>& table, u32& grid, dspace::_model_info& info,
 		std::span<const u8>& rest) {
 
@@ -381,7 +381,7 @@ namespace standard {
 		u32 grid{};
 		std::span<const u8> rest;
 
-		if (!read_head(stream_data[orz_tag::std_frames], side.table, grid, info, rest))
+		if (!read_head(stream_data[orz_tag::frames], side.table, grid, info, rest))
 			return R.empty();
 
 		side.axis = info.axis;

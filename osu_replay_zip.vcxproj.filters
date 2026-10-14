@@ -176,9 +176,6 @@
     <ClInclude Include="Lib\Threads.h">
       <Filter>Header Files\zip</Filter>
     </ClInclude>
-    <ClInclude Include="time_prior.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
     <ClInclude Include="rc.h">
       <Filter>Header Files</Filter>
     </ClInclude>
@@ -203,16 +200,7 @@
     <ClInclude Include="orz_life.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="orz_encoder_taiko.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
     <ClInclude Include="orz_encoder_std.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="orz_encoder_mania.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="orz_encoder_fruits.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="orz_dotnet.h">
@@ -227,9 +215,6 @@
     <ClInclude Include="life_prior.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="fruits_prior.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
     <ClInclude Include="device_space.h">
       <Filter>Header Files</Filter>
     </ClInclude>
@@ -240,6 +225,9 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="orz_frames.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="orz_modes.h">
       <Filter>Header Files</Filter>
     </ClInclude>
   </ItemGroup>
