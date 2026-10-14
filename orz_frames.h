@@ -63,7 +63,7 @@ namespace frames {
 			keys_changed.init(7, std::clamp(b + 4, 16, 22 + extra), 1, 64, 64, record_keys);
 			keys_bits.init(6, std::clamp(b + 2, 14, 20 + extra), 1, 64, 64, record_keys);
 			keys_high.init(1, 8, 1, 1, 1, record_keys);
-			time.init(time_inputs, std::clamp(b, 12, 16 + extra), 64, 64 * 3, 64 * 3, record_keys);
+			time.init(time_inputs, std::clamp(b, 12, 16 + extra), 64, 64 * 3 * 3, 64 * 3, record_keys);
 
 		}
 
@@ -329,7 +329,8 @@ namespace frames {
 				extra,
 			};
 
-			const size_t regime{ d1 <= 5 ? 0u : d1 <= 13 ? 1u : 2u };
+			// mixer weights and apm also by whether the keys change on this frame or did on the last
+			const size_t regime{ d1 <= 5 ? 0u : d1 <= 13 ? 1u : 2u }, key_change{ kc ? 2u : kc1 ? 1u : 0u };
 
 			m.bind(ctx);
 
@@ -340,9 +341,9 @@ namespace frames {
 
 			for (; at < listed && !(listed == n && at + 1 == listed); ++at) {
 
-				const size_t set{ (size_t)std::min<u32>(at, 63) * 3 + regime };
+				const size_t step{ (size_t)std::min<u32>(at, 63) * 3 };
 
-				if (m.code(c, index == at, (u32)std::clamp(table[at], -2, 61) + 2, set, set))
+				if (m.code(c, index == at, (u32)std::clamp(table[at], -2, 61) + 2, (step + regime) * 3 + key_change, step + key_change))
 					break;
 
 			}
