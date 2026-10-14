@@ -3,6 +3,7 @@
 #include "time_prior.h"
 
 #include <algorithm>
+#include <cmath>
 #include <span>
 #include <vector>
 
@@ -29,22 +30,50 @@ namespace frame_time {
 
 		return c;
 	}
-
 	
-	FORCEINLINE u64 rate_class(const int common_delta) {
+	struct _grid_period {
+		i64 num, den;
+	};
 
-		return common_delta < 14 ? 0 :
-			(common_delta <= 20 ? 1 : 2);
+	constexpr _grid_period GRID_PERIODS[]{ { 50, 3 }, { 25, 1 }, { 25, 2 }, { 100, 3 }, { 20, 1 }, { 0, 1 } };
+	constexpr u32 GRID_PERIOD_COUNT{ 6 }, GRID_BINS{ 25 };
+
+	FORCEINLINE u64 grid_phase(i64 now, const _grid_period& p) {
+
+		if (p.num == 0)
+			return 0;
+
+		return (u64)((((now * p.den) % p.num + p.num) % p.num) * GRID_BINS / p.num);
 	}
 
-	FORCEINLINE u64 grid_bin(i64 now) {
+	struct _time_grid {
 
-		const i64 phase{ ((now * 3) % 50 + 50) % 50 }; // in 1/3 ms
+		u64 rate{ 1 };
+		_grid_period period{ GRID_PERIODS[0] };
 
-		return (u64)(phase * 25 / 50);
-	}
+		_time_grid(const std::vector<int>& table, u32 grid) {
 
-	inline u64 osu_ctx(const std::vector<_osr_frame>& R, size_t i, i64 now, u64 rate) {
+			period = GRID_PERIODS[grid < GRID_PERIOD_COUNT ? grid : 0];
+
+			if (table.empty())
+				return;
+
+			double step{ (double)table[0] };
+
+			if (table.size() > 1 && std::abs((i64)table[0] - table[1]) == 1)
+				step = ((i64)table[0] + table[1]) * 0.5;
+
+			rate = step < 14 ? 0 : step <= 20 ? 1 : 2;
+
+		}
+
+		u64 bin(i64 now) const {
+			return grid_phase(now, period);
+		}
+
+	};
+
+	inline u64 osu_ctx(const std::vector<_osr_frame>& R, size_t i, i64 now, const _time_grid& time_grid) {
 
 		if (i < 2)
 			return 0;
@@ -66,11 +95,11 @@ namespace frame_time {
 			return 300 + ((u64)a * 8 + run) * 8 + prev_run;
 		}
 
-		return ((u64)(a * 2 + b) * 25 + grid_bin(now)) * 3 + rate;
+		return ((u64)(a * 2 + b) * 25 + time_grid.bin(now)) * 3 + time_grid.rate;
 	}
 
-	FORCEINLINE u64 grid_ctx(bool changed, i64 now, size_t i) {
-		return i < 2 ? 0 : (u64)changed * 25 + grid_bin(now);
+	FORCEINLINE u64 grid_ctx(bool changed, i64 now, size_t i, const _time_grid& time_grid) {
+		return i < 2 ? 0 : (u64)changed * 25 + time_grid.bin(now);
 	}
 
 	FORCEINLINE std::vector<u8> key_updates(const std::vector<_osr_frame>& r) {
@@ -93,7 +122,7 @@ namespace frame_time {
 		return delta;
 	}
 	
-	inline std::vector<int> write_table(_orz_construct& orz, std::span<const int> delta) {
+	inline std::vector<int> build_table(std::span<const int> delta) {
 
 		std::vector<std::pair<u32, u32>> counts{};
 
@@ -109,6 +138,62 @@ namespace frame_time {
 		for (size_t k{}; k < counts.size(); ++k)
 			table[k] = std::bit_cast<int>(counts[k].first);
 
+		return table;
+	}
+
+	inline u32 pick_grid(std::span<const int> delta) {
+
+		constexpr int SYM{ 48 };
+
+		u32 counts[GRID_PERIOD_COUNT][GRID_BINS][SYM]{};
+
+		i64 now{};
+
+		for (const int d : delta) {
+
+			const int s{ std::clamp(d, 0, SYM - 1) };
+
+			for (u32 g{}; g < GRID_PERIOD_COUNT; ++g)
+				++counts[g][grid_phase(now, GRID_PERIODS[g])][s];
+
+			now += d;
+
+		}
+
+		u32 best{};
+		double best_bits{ std::numeric_limits<double>::max() };
+
+		for (u32 g{}; g < GRID_PERIOD_COUNT; ++g) {
+
+			double bits{};
+
+			for (const auto& row : counts[g]) {
+
+				u32 total{};
+
+				for (const u32 c : row)
+					total += c;
+
+				for (const u32 c : row)
+					if (c)
+						bits += c * std::log2((double)total / c) + 0.5 * std::log2((double)total);
+
+			}
+
+			if (bits < best_bits) {
+
+				best_bits = bits;
+				best = g;
+
+			}
+
+		}
+
+		return best;
+	}
+
+	inline void write_table(_orz_construct& orz, const std::vector<int>& table, u32 grid) {
+
 		bit_stream t{};
 
 		small_write<5>((u32)table.size(), t);
@@ -119,12 +204,14 @@ namespace frame_time {
 		for (const int v : table)
 			t.push_back(v < 0);
 
+		for (int b{}; b < 3; ++b)
+			t.push_back((grid >> b) & 1);
+
 		orz.add_stream(orz_tag::time_delta_table, t.data.data(), t.data.size());
 
-		return table;
 	}
 
-	inline std::vector<int> read_table(const _stream_map& stream_data) {
+	inline std::vector<int> read_table(const _stream_map& stream_data, u32& grid) {
 
 		const _bit_view t{ stream_data[orz_tag::time_delta_table] };
 
@@ -138,6 +225,11 @@ namespace frame_time {
 		for (auto& v : table)
 			if (small_read<1>(t, bit))
 				v = (int)(0u - (u32)v); // negate without overflow
+
+		grid = 0;
+
+		for (int b{}; b < 3; ++b)
+			grid |= (u32)small_read<1>(t, bit) << b;
 
 		return table;
 	}
@@ -188,11 +280,16 @@ namespace frame_time {
 	
 	inline void write_grid(_orz_construct& orz, orz_tag tag, kind k, const std::vector<int>& delta, const std::vector<u8>& changed) {
 
-		const auto table{ write_table(orz, delta) };
+		const auto table{ build_table(delta) };
+		const u32 grid{ pick_grid(delta) };
+
+		write_table(orz, table, grid);
+
+		const _time_grid time_grid{ table, grid };
 
 		write_indices(orz, tag, k, table, delta, [&](size_t i, i64 now) {
 
-			return grid_ctx(changed[i], now, i);
+			return grid_ctx(changed[i], now, i, time_grid);
 		});
 
 	}
@@ -201,10 +298,15 @@ namespace frame_time {
 
 		std::vector<int> delta(changed.size());
 
-		read_indices(stream_data[tag], k, read_table(stream_data), delta.size(),
+		u32 grid{};
+
+		const auto table{ read_table(stream_data, grid) };
+		const _time_grid time_grid{ table, grid };
+
+		read_indices(stream_data[tag], k, table, delta.size(),
 			[&](size_t i, i64 now) {
 
-				return grid_ctx(changed[i], now, i);
+				return grid_ctx(changed[i], now, i, time_grid);
 			},
 			[&](size_t i, int d) {
 

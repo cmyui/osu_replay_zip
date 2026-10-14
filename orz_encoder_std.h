@@ -15,12 +15,16 @@ namespace standard {
 			return;
 
 		const auto delta{ frame_time::deltas(r) };
-		const auto table{ frame_time::write_table(orz, delta) };
-		const u64 rate{ frame_time::rate_class(table[0]) };
+		const auto table{ frame_time::build_table(delta) };
+		const u32 grid{ frame_time::pick_grid(delta) };
+
+		frame_time::write_table(orz, table, grid);
+
+		const frame_time::_time_grid time_grid{ table, grid };
 
 		frame_time::write_indices(orz, orz_tag::time_delta_rc, frame_time::osu, table, delta, [&](size_t i, i64 now) {
 
-			return frame_time::osu_ctx(r, i, now, rate);
+			return frame_time::osu_ctx(r, i, now, time_grid);
 		});
 
 	}
@@ -373,13 +377,15 @@ namespace standard {
 
 		if (const auto& trc{ stream_data[orz_tag::time_delta_rc] }; trc.size()) {
 
-			const auto table{ frame_time::read_table(stream_data) };
-			const u64 rate{ frame_time::rate_class(table.empty() ? 16 : table[0]) };
+			u32 grid{};
+
+			const auto table{ frame_time::read_table(stream_data, grid) };
+			const frame_time::_time_grid time_grid{ table, grid };
 
 			frame_time::read_indices(trc, frame_time::osu, table, R.size(),
 				[&](size_t i, i64 now) {
 
-					return frame_time::osu_ctx(R, i, now, rate);
+					return frame_time::osu_ctx(R, i, now, time_grid);
 				},
 				[&](size_t i, int d) {
 
