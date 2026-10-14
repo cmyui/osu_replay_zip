@@ -523,6 +523,9 @@ static void encode_osr(const char* in_file, const char* out_file, u32 flags, orz
 
 	bool relax{ (state.options & ENCODE_RELAX) != 0 };
 
+	state.autopilot = (state.options & ENCODE_AUTOPILOT) != 0;
+	state.autopilot_rate = 1.f;
+
 	auto& header_bytes{ state.osr_header };
 
 	if (flags & ORZ_FLAG::has_osr_header) {
@@ -562,6 +565,9 @@ static void encode_osr(const char* in_file, const char* out_file, u32 flags, orz
 			return;
 
 		relax |= (header_values->mods & OSR_MOD_RELAX) != 0;
+
+		state.autopilot |= (header_values->mods & (1u << 13)) != 0;
+		state.autopilot_rate = (header_values->mods & (1u << 6)) ? 1.5f : (header_values->mods & (1u << 8)) ? 0.75f : 1.f;
 
 		const size_t life_start{ pos };
 

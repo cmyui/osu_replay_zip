@@ -211,6 +211,7 @@
     <ClInclude Include="life_prior.h" />
     <ClInclude Include="orz_decimal.h" />
     <ClInclude Include="orz_device_std.h" />
+    <ClInclude Include="orz_ap_path.h" />
     <ClInclude Include="orz_dotnet.h" />
     <ClInclude Include="orz_encoder_fruits.h" />
     <ClInclude Include="orz_encoder_mania.h" />

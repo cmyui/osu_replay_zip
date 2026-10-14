@@ -348,6 +348,39 @@ namespace standard {
 
 		write_orz(best, shared, state);
 
+		if (state.autopilot && !r.empty()) {
+
+			_osr canonical{ r };
+
+			const auto path{ ap_path::encode_positions(canonical, state.autopilot_rate, state.exact_text) };
+
+			if (!path.info.empty()) {
+
+				auto previous{ std::move(state.output) };
+				_orz_construct result{ shared.time };
+
+				result.frames_crc = _orz_construct::crc_of(canonical, state.seed);
+
+				result.add_stream(orz_tag::ap_model_info, path.info.data(), path.info.size());
+
+				bit_stream models{};
+
+				models.data = path.models;
+
+				result.add_compress_stream(orz_tag::ap_path_segments, models, comp::pos_delta_prop());
+				result.add_stream(orz_tag::ap_position_residuals, path.residuals.data(), path.residuals.size());
+
+				result.append(shared.osr);
+				result.finish("");
+
+				if (previous.size() <= state.output.size())
+
+					state.output = std::move(previous);
+
+			}
+
+		}
+
 		++state.stats.files;
 
 		state.stats.frames += r.size();
@@ -388,6 +421,10 @@ namespace standard {
 				});
 
 		}
+
+		if (!stream_data[orz_tag::ap_model_info].empty())
+
+			return ap_path::decode_positions(stream_data[orz_tag::ap_model_info], stream_data[orz_tag::ap_path_segments], stream_data[orz_tag::ap_position_residuals], header->flags, R);
 
 		dspace::_model_info info{};
 

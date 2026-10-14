@@ -46,7 +46,7 @@ FORCEINLINE bool same_bits(float a, float b) {
 	return std::bit_cast<u32>(a) == std::bit_cast<u32>(b);
 }
 
-constexpr u32 ORZ_VERSION{ 0 };
+constexpr u32 ORZ_VERSION{ 1 };
 
 // limits for untrusted input, real replays are far below all of them and anything beyond is treated as corrupted
 constexpr size_t ORZ_MAX_FRAMES{ 1u << 22 }; // (~19 hours at 60 fps)
@@ -120,6 +120,10 @@ enum class orz_tag : u8 {
 	fruits_time_rc,
 	fruits_x_rc,
 	fruits_escape,
+
+	ap_model_info,
+	ap_path_segments,
+	ap_position_residuals,
 
 };
 
@@ -800,3 +804,4 @@ inline std::vector<u8> compress_osr_string(std::string_view string, bool stable)
 
 #include "device_space.h"
 #include "orz_life.h"
+#include "orz_ap_path.h"
