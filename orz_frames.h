@@ -74,7 +74,7 @@ namespace frames {
 			init_keys_time(frames, record_keys);
 
 			repeat.init(7, std::clamp(b + 4, 16, 22 + extra), 1, 64, 64, record_keys);
-			move.init(6, std::clamp(b + 3, 12, 19 + extra), 32, MOVE_STEPS * 4, MOVE_STEPS * 32, record_keys);
+			move.init(6, std::clamp(b + 3, 12, 19 + extra), 32, MOVE_STEPS * 4 * 2, MOVE_STEPS * 32, record_keys);
 			move_bits.init(2, std::clamp(b + 2, 12, 20 + extra), 1, 8 * 4, 8 * 32, record_keys);
 			slack.init(1, std::clamp(b - 2, 10, 16), 16, 64, 64, record_keys);
 			escape.init(5, std::clamp(b + 2, 12, 20 + extra), 1, 16 * 3, 16 * 3, record_keys);
@@ -369,8 +369,14 @@ namespace frames {
 
 	};
 
+	// 0, then sign and bit length (up to 15) as 1-32
+	FORCEINLINE int signed_length(i64 v) {
+		return v == 0 ? 0 : (v < 0 ? 1 : 2) + 2 * std::min(bit_length(v), 15);
+	}
+
 	struct _move_features {
-		int mode, axis, order, bkp, first_miss, prev_miss, sign, run, scale, regime, first_res, prev_res, dt, since_move, gap;
+		int mode, order, bkp, sign, scale, regime, first_res, prev_res, dt, since_move, gap;
+		int accel, vel_gap; // signed_length of the last change of this axis's move, and of the last move scaled to dt less the prediction
 	};
 
 	// what the move features remember per axis
@@ -407,16 +413,13 @@ namespace frames {
 
 	};
 
-	// fields of dspace::move_ctx
+	// the fields of dspace::move_ctx used here: prediction sign, |prediction| bucket and mode
 	FORCEINLINE _move_features move_features(u64 ctx) {
 
 		_move_features f{};
 
-		f.run = (int)(ctx % 3); ctx /= 3;
-		f.sign = (int)(ctx % 3); ctx /= 3;
-		f.prev_miss = (int)(ctx % 3); ctx /= 3;
-		f.first_miss = (int)(ctx % 3); ctx /= 3;
-		f.axis = (int)(ctx % 2); ctx /= 2;
+		f.sign = (int)(ctx / 3 % 3);
+		ctx /= 3 * 3 * 3 * 3 * 2; // run, sign, previous miss, first axis miss, axis
 		f.bkp = (int)(ctx % 32); ctx /= 32;
 		f.mode = (int)ctx;
 
@@ -430,7 +433,7 @@ namespace frames {
 
 		const u64 ctx[6]{
 			(((u64)f.bkp * 3 + f.regime) * 2 + f.order) * 5 + f.mode,
-			(((((((u64)f.mode * 64 + f.bkp) * 2 + f.axis) * 3 + f.first_miss) * 3 + f.prev_miss) * 3 + f.sign) * 3 + f.run) * 32 + f.scale,
+			((((u64)f.accel * 33 + f.vel_gap) * 2 + f.order) * 3 + f.regime) * 32 + f.bkp,
 			(((u64)f.scale * 20 + std::min(f.first_res, 19)) * 2 + f.order) * 3 + f.regime,
 			((u64)std::min(f.dt, 40) * 32 + f.bkp) * 2 + f.order,
 			(((u64)f.since_move * 16 + f.gap) * 8 + std::min(f.bkp, 7)) * 3 + f.regime,
@@ -446,7 +449,7 @@ namespace frames {
 
 			const u32 slot{ step < 32 ? step : step & 15 };
 
-			return M.move.code(c, y, slot, (size_t)step * 4 + (size_t)f.regime, (size_t)step * 32 + apc);
+			return M.move.code(c, y, slot, ((size_t)step * 4 + (size_t)f.regime) * 2 + (size_t)f.order, (size_t)step * 32 + apc);
 		};
 
 		if (decide(r == 0, 0))
@@ -710,12 +713,15 @@ namespace frames {
 
 					const dspace::axis_params& params{ side.axis[a].at(i) };
 
-					_move_features mf{ move_features(mp.ctx(params, pr, a, q ? dspace::miss_class(first_d - first_pred) : 0)) };
+					_move_features mf{ move_features(mp.ctx(params, pr, a, 0)) };
 
 					history[a].fill(mf, dt);
 
 					mf.order = q;
 					mf.first_res = q ? bit_length(first_res) * 2 + (first_res < 0) : 0;
+					mf.accel = mp.n >= 2 ? signed_length(mp.hist[a][0] - mp.hist[a][1]) : 0;
+					mf.vel_gap = mp.n >= 1 ? signed_length(dspace::move_predictor::round_div(mp.hist[a][0] * dspace::move_predictor::ms(pdt),
+						dspace::move_predictor::ms(mp.hist_dt[0])) - pr) : 0;
 
 					const i64 prev_K{ i ? fd.K[a][i - 1] : 0 };
 					const i64 res{ std::clamp(move_residual(c, M, encoding ? fd.K[a][i] - prev_K - pr : 0, mf), -MAX_MOVE, MAX_MOVE) };
