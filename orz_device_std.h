@@ -193,26 +193,41 @@ namespace standard {
 			double path[9];
 			int pass{};
 
+			size_t last_end{ SIZE_MAX };
+			double last_s{};
+
 			for (double vmax{ 1.0 }; vmax <= 256.0; vmax *= 2.0, ++pass) {
 
 				const size_t end{ (size_t)(std::upper_bound(t.begin(), t.end(), vmax) - t.begin()) };
-				const double inv{ 1.0 / s }, tol{ 0.2 * s };
 
-				double a{}, b{};
+				// an unchanged step over the same prefix is already a fixed point
+				if (end != last_end || s != last_s) {
 
-				for (size_t j{}; j < end; ++j) {
+					last_end = end;
+					last_s = s;
 
-					const double v{ t[j] };
-					const double k{ (double)(int)(v * inv + 0.5) };
-					const bool in{ k >= 1 && std::abs(v - k * s) < tol };
+					const double inv{ 1.0 / s }, tol{ 0.2 * s };
 
-					a += in ? v * k : 0.0;
-					b += in ? k * k : 0.0;
+					double a{}, b{};
+
+					for (size_t j{}; j < end; ++j) {
+
+						const double v{ t[j] };
+						const double k{ (double)(int)(v * inv + 0.5) };
+
+						if (k >= 1 && std::abs(v - k * s) < tol) {
+
+							a += v * k;
+							b += k * k;
+
+						}
+
+					}
+
+					if (b > 0)
+						s = a / b;
 
 				}
-
-				if (b > 0)
-					s = a / b;
 
 				if (const auto it{ climbed[pass].find(s) }; it != climbed[pass].end()) {
 

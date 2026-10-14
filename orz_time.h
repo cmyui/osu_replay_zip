@@ -43,7 +43,17 @@ namespace frame_time {
 		if (p.num == 0)
 			return 0;
 
-		return (u64)((((now * p.den) % p.num + p.num) % p.num) * GRID_BINS / p.num);
+		const i64 phase{ now * p.den };
+
+		switch (p.num) {
+
+			case 50: return ((phase % 50 + 50) % 50) * GRID_BINS / 50;
+			case 25: return ((phase % 25 + 25) % 25) * GRID_BINS / 25;
+			case 100: return ((phase % 100 + 100) % 100) * GRID_BINS / 100;
+			case 20: return ((phase % 20 + 20) % 20) * GRID_BINS / 20;
+			default: return (u64)((((phase % p.num + p.num) % p.num) * GRID_BINS) / p.num);
+
+		}
 	}
 
 	struct _time_grid {
