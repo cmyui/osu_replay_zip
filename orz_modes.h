@@ -27,9 +27,6 @@ namespace modes {
 
 	constexpr double HYPER_MIN_RATIO{ 1.3 };
 
-	// a frame this long after the last 60 Hz one is the next
-	constexpr i64 TICK_MS{ 14 };
-
 	// valid catcher residuals are far below 2^40, only damaged files reach it
 	constexpr i64 MAX_RES{ 1ll << 40 };
 
@@ -77,7 +74,7 @@ namespace modes {
 
 		void init(size_t frames, kind mode) {
 
-			keys_time.init_keys_time(frames, false, 7);
+			keys_time.init_keys_time(frames);
 
 			if (mode != fruits)
 				return;
@@ -410,10 +407,10 @@ namespace modes {
 		std::vector<u8> still(n); // per frame: the keys (osu!catch: the catcher) stayed
 
 		frames::_key_coder keys{ side.bits };
-		frames::_time_coder time{ side.table };
+		frames::_time_coder time{ side.table, side.grid };
 		_catcher catcher{ side.exact_text };
 
-		i64 now{}, last_tick{};
+		i64 now{};
 		u32 pk{}; // keys before the frame (osu!mania: the held columns)
 		bool pkc{}; // the keys changed in the previous frame
 		size_t speed_at{};
@@ -432,12 +429,10 @@ namespace modes {
 
 			const bool kc{ k != pk };
 
-			// whether the keys (osu!catch: the catcher) stayed in the last three frames, and where the frame starts against the
-			// 60 Hz frames: the last one's grid bin, the time since
+			// whether the keys (osu!catch: the catcher) stayed in the last three frames
 			const u64 stays{ ((f >= 1 ? (u64)still[f - 1] : 2) * 3 + (f >= 2 ? (u64)still[f - 2] : 2)) * 3 + (f >= 3 ? (u64)still[f - 3] : 2) };
-			const u64 tick{ ((u64)side.grid.bin(last_tick) * 32 + (u64)std::clamp<i64>(now - last_tick, 0, 31)) * 2 + kc };
 
-			delta[f] = time.code(c, M.keys_time.time, std::span{ delta }.first(f), encoding ? r.delta : 0, phase, kc, pkc, stays, tick);
+			delta[f] = time.code(c, M.keys_time.time, std::span{ delta }.first(f), encoding ? r.delta : 0, phase, kc, pkc, stays);
 
 			if (!encoding) {
 
@@ -481,10 +476,6 @@ namespace modes {
 			}
 
 			now += delta[f];
-
-			// the game records a frame at 60 Hz and between them whenever something happens
-			if (now - last_tick >= TICK_MS)
-				last_tick = now;
 
 			keys.update(pk, k, now);
 

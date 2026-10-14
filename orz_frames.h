@@ -20,6 +20,9 @@ namespace frames {
 	// a delta is coded as its place in the replay's own table (most used first), the unary covers this many entries
 	constexpr u32 LISTED{ 64 };
 
+	// a frame this long after the last 60 Hz one is the next
+	constexpr i64 TICK_MS{ 14 };
+
 	constexpr int KEY_BITS{ 5 }; // M1 M2 K1 K2 smoke (folded like the key stream), higher bits are escaped
 
 	// valid moves are far below 2^40 and K far below 2^50, only damaged files reach these
@@ -58,7 +61,7 @@ namespace frames {
 
 		// tables follow the replay's length up to a cap (the frame count of a file to decode is untrusted),
 		// and are larger when training priors. The keys and time models, which every mode uses:
-		void init_keys_time(size_t frames, bool record_keys = false, int time_inputs = 6) {
+		void init_keys_time(size_t frames, bool record_keys = false) {
 
 			const int b{ (int)std::bit_width(frames) }, extra{ record_keys ? 4 : 0 };
 
@@ -66,16 +69,15 @@ namespace frames {
 			keys_changed.init(7, std::clamp(b + 4, 16, 22 + extra), 1, 64, 64, record_keys);
 			keys_bits.init(6, std::clamp(b + 2, 14, 20 + extra), 1, 64, 64, record_keys);
 			keys_high.init(1, 8, 1, 1, 1, record_keys);
-			time.init(time_inputs, std::clamp(b, 12, 16 + extra), 64, 64 * 3 * 3, 64 * 3, record_keys);
+			time.init(7, std::clamp(b, 12, 16 + extra), 64, 64 * 3 * 3, 64 * 3, record_keys);
 
 		}
 
-		// autopilot replays time frames with a seventh input, the next knot
-		void init(size_t frames, bool record_keys = false, bool autopilot = false) {
+		void init(size_t frames, bool record_keys = false) {
 
 			const int b{ (int)std::bit_width(frames) }, extra{ record_keys ? 4 : 0 };
 
-			init_keys_time(frames, record_keys, autopilot ? 7 : 6);
+			init_keys_time(frames, record_keys);
 
 			repeat.init(8, std::clamp(b + 4, 16, 22 + extra), 1, 64, 64, record_keys);
 			move.init(6, std::clamp(b + 3, 12, 19 + extra), 32, MOVE_STEPS * 4 * 2, MOVE_STEPS * 32, record_keys);
@@ -307,12 +309,14 @@ namespace frames {
 	struct _time_coder {
 
 		const std::vector<int>& table;
+		frame_time::_time_grid grid;
 		int zero_run{}, prev_zero_run{}, one_run{};
+		i64 now{}, last_tick{}; // the time so far, the last 60 Hz frame's (the game records one at 60 Hz and others between)
 
 		// the delta of frame f = past.size(). kc / kc1: keys changed in this / the previous frame, mode_ctx: the mode's own
-		// context, below 27, extra: a seventh context for a model with seven inputs
+		// context, below 27
 		template<typename Coder>
-		int code(Coder& c, cm::model& m, std::span<const int> past, int want, u64 phase, u64 kc, u64 kc1, u64 mode_ctx, u64 extra = 0) {
+		int code(Coder& c, cm::model& m, std::span<const int> past, int want, u64 phase, u64 kc, u64 kc1, u64 mode_ctx) {
 
 			const size_t f{ past.size() };
 			const u64 d1{ f >= 1 ? delta_bucket(past[f - 1]) : 50 }, d2{ f >= 2 ? delta_bucket(past[f - 2]) : 50 },
@@ -332,7 +336,7 @@ namespace frames {
 				((phase * 64 + d1) * 3 + kc) * 2 + kc1,
 				d1 * 27 + mode_ctx,
 				(rate * 64 + d1) * 3 + kc,
-				extra,
+				((u64)grid.bin(last_tick) * 32 + (u64)std::clamp<i64>(now - last_tick, 0, 31)) * 2 + kc,
 			};
 
 			// mixer weights and apm also by whether the keys change on this frame or did on the last
@@ -369,6 +373,10 @@ namespace frames {
 			}
 
 			one_run = d == 1 ? one_run + 1 : 0;
+			now += d;
+
+			if (now - last_tick >= TICK_MS)
+				last_tick = now;
 
 			return d;
 		}
@@ -702,7 +710,7 @@ namespace frames {
 		i64 now{};
 
 		_key_coder keys{ KEY_BITS };
-		_time_coder time{ side.table };
+		_time_coder time{ side.table, side.grid };
 
 		// repeat flag
 		int repeat_run{};
@@ -742,18 +750,7 @@ namespace frames {
 				// the repeat flags of the last three frames (2 before the first)
 				const u64 r{ ((f >= 1 ? (u64)fd.repeated[f - 1] : 2) * 3 + (f >= 2 ? (u64)fd.repeated[f - 2] : 2)) * 3 + (f >= 3 ? (u64)fd.repeated[f - 3] : 2) };
 
-				// autopilot: frames often land on a knot, the next one ahead is known within a move
-				u64 next_knot{};
-
-				if (side.ap.on) {
-
-					const i64 next{ ap.path.next(now) };
-
-					next_knot = (next < 0 ? 63 : (u64)std::min<i64>(next - now, 62)) * 64 + (f ? delta_bucket(fd.delta[f - 1]) : 50);
-
-				}
-
-				fd.delta[f] = time.code(c, M.time, std::span{ fd.delta }.first(f), encoding ? fd.delta[f] : 0, phase, changed, kc1, r, next_knot);
+				fd.delta[f] = time.code(c, M.time, std::span{ fd.delta }.first(f), encoding ? fd.delta[f] : 0, phase, changed, kc1, r);
 
 			}
 
@@ -1027,7 +1024,7 @@ namespace frames {
 
 		_models M{};
 
-		M.init(frames, false, side.ap.on);
+		M.init(frames);
 		seed_priors(M, side);
 
 		cm::bit_encoder e{};
@@ -1055,7 +1052,7 @@ namespace frames {
 
 		_reader(std::span<const u8> data, _frame_data& fd, const _side& side, size_t frames) : d{ data } {
 
-			M.init(frames, false, side.ap.on);
+			M.init(frames);
 			seed_priors(M, side);
 
 			frame_loop(d, M, fd, side, frames, false);

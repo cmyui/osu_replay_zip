@@ -203,14 +203,6 @@ namespace autopilot {
 			return r;
 		}
 
-		// the time of the first knot after t, -1 for none
-		i64 next(i64 t) const {
-
-			const auto it{ std::upper_bound(k.begin(), k.end(), t, [](i64 v, const knot& q) { return v < q.t; }) };
-
-			return it == k.end() ? -1 : it->t;
-		}
-
 		// Vector2.Lerp between the knots around t, as InputManager plays a replay
 		void predict(i64 t, float (&out)[2]) {
 
