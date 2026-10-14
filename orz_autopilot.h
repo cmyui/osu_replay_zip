@@ -17,8 +17,8 @@ namespace autopilot {
 	constexpr u32 RATE_COUNT{ 3 };
 
 	// limits for untrusted input: moves longer than these are not autopilot moves (an eased one longer is taken as
-	// straight), knots kept around a frame's time
-	constexpr i64 MAX_MOVE_MS{ 1 << 16 }, MAX_EASE_MS{ 1 << 12 };
+	// straight), knots kept around a frame's time. Eased knots step a float time, which holds whole ms below FLOAT_MS.
+	constexpr i64 MAX_MOVE_MS{ 1 << 16 }, MAX_EASE_MS{ 1 << 12 }, FLOAT_MS{ 1 << 24 };
 	constexpr size_t KEEP_KNOTS{ 1 << 12 };
 
 	struct _params {
@@ -247,7 +247,7 @@ namespace autopilot {
 			if (m.wait > 0)
 				k.push_back({ t0, { m.from[0], m.from[1] } });
 
-			if (m.type == kind::ease && m.time <= MAX_EASE_MS) {
+			if (m.type == kind::ease && m.time <= MAX_EASE_MS && std::abs(t0) < FLOAT_MS && std::abs(t1) < FLOAT_MS) {
 
 				// RulesetOsu.CreateAutoplayReplay: samples from the start every sample_ms (float), the time truncated
 				const float end{ (float)t1 };
@@ -341,12 +341,17 @@ namespace autopilot {
 
 		static constexpr size_t TARGETS{ 40 }, NEAR_TARGETS{ 4 }, FAR_TARGETS{ 3 };
 
+		// knots built and frames tried per frame before it stops looking for moves (real replays stay far below)
+		static constexpr size_t WORK{ 1 << 12 };
+
 		std::span<const sample> s;
 		_screen screen;
 		float sample_ms;
 
 		// about what a new position costs off the knots (the line through the last two), in bits, and summed
 		std::vector<int> off_sum;
+
+		mutable size_t work{};
 
 		// rough code length of a value
 		static int bits(i64 v) {
@@ -404,8 +409,9 @@ namespace autopilot {
 			bool on[2]{ true, true };
 
 			n[0] = n[1] = within = 0;
+			work += tr.k.size();
 
-			for (size_t j{ i }; j < s.size() && tr.covers(s[j].t) && (on[0] || on[1]); ++j, ++within) {
+			for (size_t j{ i }; j < s.size() && tr.covers(s[j].t) && (on[0] || on[1]); ++j, ++within, ++work) {
 
 				float v[2];
 
@@ -551,7 +557,7 @@ namespace autopilot {
 
 			for (size_t i{}; i < s.size(); ++i) {
 
-				if (!pth.covers(s[i].t) && i > 0) {
+				if (!pth.covers(s[i].t) && i > 0 && work < WORK * s.size()) {
 
 					const bool is_knot{ prev_covered && !pth.k.empty() };
 					const knot anchor{ is_knot ? pth.k.back() : knot{ s[i - 1].t, { s[i - 1].v[0], s[i - 1].v[1] } } };
