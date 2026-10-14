@@ -97,7 +97,7 @@ enum class orz_tag : u8 {
 	// delta table and the mode's model, then the context mixed frames: orz_frames.h (osu!standard), orz_modes.h (other modes)
 	frames = 0,
 
-	osr_parts, // .osr bytes kept as they are: the header, what follows the life bar, what follows the replay data
+	osr_parts, // the .osr bytes around the replay data: the header, what follows the life bar, what follows the replay data (orz_parts.h)
 	life_bar,
 	osr_replay_data,
 
@@ -764,3 +764,4 @@ inline std::vector<u8> compress_osr_string(std::string_view string, bool stable)
 
 #include "device_space.h"
 #include "orz_life.h"
+#include "orz_parts.h"

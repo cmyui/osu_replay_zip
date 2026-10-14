@@ -31,40 +31,6 @@ struct _stream_map {
 namespace standard { bool decode(const _orz_header* header, const _stream_map& stream_data, std::vector<_osr_frame>& R); }
 namespace modes { bool decode(const _orz_header* header, const _stream_map& stream_data, std::vector<_osr_frame>& R); }
 
-// the parts of an osr_parts stream (see _orz_construct::add_osr_parts), empty when absent or damaged
-struct _osr_parts {
-
-	std::span<const u8> part[3]; // header, after the life bar, after the replay data
-
-	explicit _osr_parts(std::span<const u8> data) {
-
-		size_t at{};
-
-		for (auto& p : part) {
-
-			u32 size{};
-
-			for (int shift{}; at < data.size() && shift < 35; shift += 7) {
-
-				size |= u32(data[at] & 0x7f) << shift;
-
-				if (!(data[at++] & 0x80))
-					break;
-
-			}
-
-			if (size > data.size() - at)
-				break;
-
-			p = data.subspan(at, size);
-			at += size;
-
-		}
-
-	}
-
-};
-
 struct _decoded_orz {
 	_stream_map streams;
 	std::vector<_osr_frame> frames;
@@ -180,7 +146,7 @@ static bool decode_to_osr(const char* input_file, const char* output_file, const
 
 	const auto& [stream_data, R, flags] { decoded };
 
-	const _osr_parts parts{ stream_data[orz_tag::osr_parts] };
+	const auto parts{ osr_parts::decode(stream_data[orz_tag::osr_parts]) };
 
 	const std::vector<u8> compressed_string{ (flags & ORZ_FLAG::replay_verbatim) ?
 		stream_data[orz_tag::osr_replay_data] :
@@ -193,9 +159,7 @@ static bool decode_to_osr(const char* input_file, const char* output_file, const
 
 		// header chunk, life graph, chunk up to the replay data length
 
-		const auto& header{ parts.part[0] };
-
-		add_to_u8(final_file_output, header.data(), header.size());
+		add_to_u8(final_file_output, parts.header);
 
 		if (const auto& life_raw{ stream_data[orz_tag::life_bar] }; life_raw.size()) {
 
@@ -210,7 +174,7 @@ static bool decode_to_osr(const char* input_file, const char* output_file, const
 		} else
 			final_file_output.push_back(0x00);
 
-		final_file_output.insert(final_file_output.end(), parts.part[1].begin(), parts.part[1].end());
+		add_to_u8(final_file_output, parts.after_life);
 
 		add_to_u8(final_file_output, compressed_string.size());
 
@@ -219,7 +183,7 @@ static bool decode_to_osr(const char* input_file, const char* output_file, const
 	add_to_u8(final_file_output, compressed_string);
 
 	// bytes after the replay data (online score id, extra data), verbatim
-	final_file_output.insert(final_file_output.end(), parts.part[2].begin(), parts.part[2].end());
+	add_to_u8(final_file_output, parts.tail);
 
 	return write_file(output_file, final_file_output);
 }

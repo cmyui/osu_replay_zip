@@ -200,6 +200,9 @@
     <ClInclude Include="orz_life.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="orz_parts.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
     <ClInclude Include="orz_encoder_std.h">
       <Filter>Header Files</Filter>
     </ClInclude>

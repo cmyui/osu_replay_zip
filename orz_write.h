@@ -33,15 +33,6 @@ void add_to_u8(std::vector<u8>& output, const std::vector<T>& input) {
 	memcpy(output.data() + i, input.data(), input.size() * SIZE);
 }
 
-// unsigned leb128, as .osr strings give their length
-void add_uleb128(std::vector<u8>& output, u32 v) {
-
-	for (; v > 0x7f; v >>= 7)
-		output.push_back(u8(v | 0x80));
-
-	output.push_back(u8(v));
-}
-
 std::pair<u32, u32>& unique_add(u32 v, std::vector<std::pair<u32, u32>>& b) {
 
 	for (auto& t : b) {
@@ -117,20 +108,11 @@ struct _orz_construct {
 
 		const auto& st{ *state };
 
-		{ // header, bytes after the life bar, bytes after the replay data: each a leb128 size, then the bytes
+		if (st.osr_header.size() || st.after_life.size() || st.tail.size()) {
 
-			std::vector<u8> parts;
+			const auto parts{ osr_parts::encode({ st.osr_header, st.after_life, st.tail }) };
 
-			for (const auto* bytes : { &st.osr_header, &st.after_life, &st.tail }) {
-
-				add_uleb128(parts, (u32)bytes->size());
-
-				parts.insert(parts.end(), bytes->begin(), bytes->end());
-
-			}
-
-			if (parts.size() > 3)
-				add_stream(orz_tag::osr_parts, parts.data(), parts.size());
+			add_stream(orz_tag::osr_parts, parts.data(), parts.size());
 
 		}
 
