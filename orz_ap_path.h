@@ -1030,6 +1030,196 @@ namespace ap_path {
 
 	}
 
+	inline point sampled_velocity(const _osr& r, const size_t i) {
+
+		if (!i)
+
+			return {};
+
+		const point p{ pos(r[i - 1]) };
+
+		if (i < 2 || r[i].delta <= 0)
+
+			return p;
+
+		size_t j{ i - 1 };
+		i64 elapsed{};
+
+		while (j && elapsed == 0 && i - j <= 64) {
+
+			if (r[j].delta < 0)
+
+				return p;
+
+			elapsed += r[j].delta;
+			--j;
+
+		}
+
+		if (elapsed <= 0)
+
+			return p;
+
+		const double rate{ (double)r[i].delta / elapsed };
+		const point q{ (float)(p.x + ((double)p.x - r[j].x) * rate), (float)(p.y + ((double)p.y - r[j].y) * rate) };
+
+		return std::isfinite(q.x) && std::isfinite(q.y) ? q : p;
+
+	}
+
+	inline size_t previous_position(const _osr& r, const size_t i) {
+
+		size_t j{ i - 1 };
+
+		for (int n{}; j && n < 32; ++n) {
+
+			--j;
+
+			if (distance(pos(r[j]), pos(r[i - 1])) > 1e-8)
+
+				break;
+
+		}
+
+		return j;
+
+	}
+
+	inline int first_axis(const _osr& r, const size_t i) {
+
+		if (i < 2)
+
+			return 0;
+
+		const size_t j{ previous_position(r, i) };
+
+		return std::abs((double)r[i - 1].y - r[j].y) > std::abs((double)r[i - 1].x - r[j].x) ? 1 : 0;
+
+	}
+
+	inline float line_prediction(const _osr& r, const size_t i, const int a, const float fallback) {
+
+		if (i < 2)
+
+			return fallback;
+
+		const size_t j{ previous_position(r, i) };
+		const point last{ pos(r[i - 1]) }, before{ pos(r[j]) };
+		const int first{ 1 - a };
+		const double dx{ (&last.x)[first] - (&before.x)[first] }, dy{ (&last.x)[a] - (&before.x)[a] };
+
+		if (std::abs(dx) < 1e-6)
+
+			return fallback;
+
+		const double x{ (&r[i].x)[first] };
+
+		if (x == (&last.x)[first])
+
+			return (&last.x)[a];
+
+		double predicted{ (&last.x)[a] + (x - (&last.x)[first]) * dy / dx };
+		double sx{}, sy{}, sxx{}, sxy{};
+		size_t count{};
+		point previous{ last };
+
+		for (size_t k{ i }; k && i - k < 16;) {
+
+			--k;
+
+			const point p{ pos(r[k]) };
+
+			if (k + 1 < i && distance(p, previous) < 1e-8)
+
+				continue;
+
+			const double px{ (&p.x)[first] - (&last.x)[first] }, py{ (&p.x)[a] - (&last.x)[a] };
+			const double error{ (py * dx - px * dy) / std::hypot(dx, dy) };
+
+			if (std::abs(error) > 0.0005)
+
+				break;
+
+			sx += px;
+			sy += py;
+			sxx += px * px;
+			sxy += px * py;
+			++count;
+			previous = p;
+
+		}
+
+		if (count >= 3 && count * sxx - sx * sx > 1e-8) {
+
+			const double slope{ (count * sxy - sx * sy) / (count * sxx - sx * sx) };
+
+			predicted = (&last.x)[a] + sy / count + slope * (x - (&last.x)[first] - sx / count);
+
+		}
+
+		return std::isfinite(predicted) ? (float)predicted : fallback;
+
+	}
+
+	inline int residual_class(const i64 value) {
+
+		const u64 n{ (u64)(value < 0 ? -value : value) };
+
+		return n == 0 ? 0 : n < 2 ? 1 : n < 4 ? 2 : n < 16 ? 3 : n < 256 ? 4 : n < 4096 ? 5 : n < 65536 ? 6 : 7;
+
+	}
+
+	inline u64 residual_context(const kind type, const int order, const int miss, const int first_miss, const int delta) {
+
+		const int dt{ delta <= 0 ? 0 : delta == 1 ? 1 : delta <= 8 ? 2 : delta <= 16 ? 3 : 4 };
+
+		return ((((u64)type * 2 + order) * 4 + miss) * 8 + (order ? first_miss : 0)) * 5 + dt;
+
+	}
+
+	inline std::vector<u8> position_residuals(const _osr& r, const std::vector<segment>& segments,
+		const std::vector<i64>& times, const screen& mapping, const bool shortest, const bool coupled) {
+
+		rc::rc_encoder coder{};
+		rc::value_coder residual{ 16, 32 };
+		int miss[2]{};
+
+		for (const auto& s : segments)
+
+			for (size_t i{ s.begin }; i < s.begin + s.count; ++i) {
+
+				const bool velocity{ s.type == kind::velocity };
+				const point p{ velocity ? (coupled ? sampled_velocity(r, i) : velocity_prediction(r, i)) : predict(s, times[i], mapping) };
+				const int first{ coupled && velocity ? first_axis(r, i) : 0 };
+				int first_miss{};
+
+				for (int order{}; order < 2; ++order) {
+
+					const int a{ first ^ order };
+					const float predicted{ coupled && velocity && order ? line_prediction(r, i, a, a ? p.y : p.x) : (a ? p.y : p.x) };
+					i64 actual{}, pr{};
+
+					dotnet::text_ord(a ? r[i].y : r[i].x, shortest, actual);
+					dotnet::text_ord(predicted, shortest, pr);
+
+					const i64 diff{ actual - pr };
+					const u64 ctx{ coupled ? residual_context(s.type, order, miss[a], first_miss, r[i].delta) : ((u64)s.type * 2 + a) * 4 + miss[a] };
+
+					residual.encode(coder, ctx, rc::zz(diff));
+					miss[a] = diff == 0 ? 0 : std::abs(diff) < 4 ? 1 : std::abs(diff) < 32 ? 2 : 3;
+
+					if (!order)
+
+						first_miss = residual_class(diff);
+
+				}
+
+			}
+
+		return coder.finish();
+
+	}
+
 	inline encoded encode_positions(_osr& r, const float rate, const bool shortest, const double tolerance = 0.2) {
 
 		encoded e{};
@@ -1125,36 +1315,16 @@ namespace ap_path {
 		put_float(e.info, rate);
 		e.models = write_models(segments);
 
-		rc::rc_encoder coder;
-		rc::value_coder residual{ 16, 32 };
-		int miss[2]{};
+		e.residuals = position_residuals(r, segments, times, e.mapping, shortest, false);
 
-		for (auto& s : segments) {
+		auto coupled{ position_residuals(r, segments, times, e.mapping, shortest, true) };
 
-			for (size_t i{ s.begin }; i < s.begin + s.count; ++i) {
+		if (coupled.size() < e.residuals.size()) {
 
-				const point p{ s.type == kind::velocity ? velocity_prediction(r, i) : predict(s, times[i], e.mapping) };
-
-				for (int a{}; a < 2; ++a) {
-
-					i64 actual{}, pr{};
-
-					dotnet::text_ord(a ? r[i].y : r[i].x, shortest, actual);
-					dotnet::text_ord(a ? p.y : p.x, shortest, pr);
-
-					const i64 diff{ actual - pr };
-					const u64 ctx{ ((u64)s.type * 2 + a) * 4 + miss[a] };
-
-					residual.encode(coder, ctx, rc::zz(diff));
-					miss[a] = diff == 0 ? 0 : std::abs(diff) < 4 ? 1 : std::abs(diff) < 32 ? 2 : 3;
-
-				}
-
-			}
+			e.info[0] = 2;
+			e.residuals = std::move(coupled);
 
 		}
-
-		e.residuals = coder.finish();
 
 		return e;
 
@@ -1165,7 +1335,7 @@ namespace ap_path {
 
 		try {
 
-			if (info.size() < 3 || info[0] != 1 || info[1] != 0 || info[2] > 1 || residual_bytes.empty())
+			if (info.size() < 3 || (info[0] != 1 && info[0] != 2) || info[1] != 0 || info[2] > 1 || residual_bytes.empty())
 
 				return false;
 
@@ -1195,19 +1365,26 @@ namespace ap_path {
 			int miss[2]{};
 			const bool shortest{ (flags & ORZ_FLAG::text_shortest) != 0 };
 
+			const bool coupled{ info[0] == 2 };
+
 			for (auto& s : segments)
 
 				for (size_t i{ s.begin }; i < s.begin + s.count; ++i) {
 
-					const point p{ s.type == kind::velocity ? velocity_prediction(r, i) : predict(s, times[i], map) };
+					const bool velocity{ s.type == kind::velocity };
+					const point p{ velocity ? (coupled ? sampled_velocity(r, i) : velocity_prediction(r, i)) : predict(s, times[i], map) };
+					const int first{ coupled && velocity ? first_axis(r, i) : 0 };
+					int first_miss{};
 
-					for (int a{}; a < 2; ++a) {
+					for (int order{}; order < 2; ++order) {
 
+						const int a{ first ^ order };
+						const float predicted{ coupled && velocity && order ? line_prediction(r, i, a, a ? p.y : p.x) : (a ? p.y : p.x) };
 						i64 pr{};
 
-						dotnet::text_ord(a ? p.y : p.x, shortest, pr);
+						dotnet::text_ord(predicted, shortest, pr);
 
-						const u64 ctx{ ((u64)s.type * 2 + a) * 4 + miss[a] };
+						const u64 ctx{ coupled ? residual_context(s.type, order, miss[a], first_miss, r[i].delta) : ((u64)s.type * 2 + a) * 4 + miss[a] };
 						const u64 coded{ residual.decode(coder, ctx) };
 
 						if (coded > (1ull << 35))
@@ -1218,6 +1395,10 @@ namespace ap_path {
 
 						miss[a] = diff == 0 ? 0 : std::abs(diff) < 4 ? 1 : std::abs(diff) < 32 ? 2 : 3;
 						(&r[i].x)[a] = dotnet::from_text_ord(pr + diff, shortest);
+
+						if (!order)
+
+							first_miss = residual_class(diff);
 
 					}
 
