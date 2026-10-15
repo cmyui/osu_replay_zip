@@ -19,9 +19,6 @@ namespace modes {
 	// osu!mania x holds the held columns as bits, up to 18 (9K co-op)
 	constexpr int MAX_COLUMNS{ 18 };
 
-	// every replay starts with two frames at this position
-	constexpr float START_X{ 256.f }, START_Y{ -500.f };
-
 	// y of every osu!taiko and osu!catch frame
 	constexpr float FIELD_Y{ 9999.f };
 
@@ -54,7 +51,7 @@ namespace modes {
 		switch (mode) {
 		case taiko: return !same_bits(f.x, taiko_x(f.keys)) || !same_bits(f.y, FIELD_Y);
 		case fruits: return !same_bits(f.y, FIELD_Y) || !text_ordinal(f.x, exact_text, ord);
-		default: return same_bits(f.x, START_X) && same_bits(f.y, START_Y);
+		default: return same_bits(f.x, POS_DEFAULT_X) && same_bits(f.y, POS_DEFAULT_Y);
 		}
 
 	}
@@ -125,7 +122,7 @@ namespace modes {
 
 			escaped[f + gap] = 1;
 
-			if (!c.code(encoding && same_bits(r.x, START_X) && same_bits(r.y, START_Y), 32768)) {
+			if (!c.code(encoding && same_bits(r.x, POS_DEFAULT_X) && same_bits(r.y, POS_DEFAULT_Y), 32768)) {
 
 				const float x{ float_from_bits((u32)frames::raw(c, std::bit_cast<u32>(r.x), 32)) };
 				const float y{ float_from_bits((u32)frames::raw(c, std::bit_cast<u32>(r.y), 32)) };
@@ -139,8 +136,8 @@ namespace modes {
 
 			} else if (!encoding) {
 
-				r.x = START_X;
-				r.y = START_Y;
+				r.x = POS_DEFAULT_X;
+				r.y = POS_DEFAULT_Y;
 
 			}
 
@@ -204,7 +201,7 @@ namespace modes {
 	struct _catcher {
 
 		bool exact_text{};
-		float x{ START_X };
+		float x{ POS_DEFAULT_X };
 		i64 x_ord{ -1 }; // -1: none
 		double hyper{ 1.0 };
 		int dir{ 1 }, since_move{ 64 }, run{};
@@ -220,7 +217,7 @@ namespace modes {
 
 		FORCEINLINE float predict(int d, u32 keys, int delta) const {
 
-			const double from{ std::isfinite(x) ? (double)x : (double)START_X };
+			const double from{ std::isfinite(x) ? (double)x : (double)POS_DEFAULT_X };
 
 			return (float)std::clamp(from + d * walk_speed(keys) * carried_mul(d) * delta, 0.0, 512.0);
 		}

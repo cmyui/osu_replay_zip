@@ -10,9 +10,9 @@ Replay set: https://drive.google.com/file/d/1i2oe929loEzhvCfRYG-DeZZQ_YouaBYD/vi
 Sizes are totals over the whole set: the .osr replay data (LZMA) in, the .orz out, in bytes.
 
 # osu!
-30.612% of the original size (4,162 replays)
+30.563% of the original size (4,162 replays)
 
-226,602,464 -> 69,368,607
+226,602,464 -> 69,256,361
 
 # taiko
 47.134% of the original size (456 replays)
@@ -30,6 +30,6 @@ Sizes are totals over the whole set: the .osr replay data (LZMA) in, the .orz ou
 10,419,674 -> 4,753,144
 
 # Total
-32.422% of the original size (6,552 replays)
+32.378% of the original size (6,552 replays)
 
-254,390,290 -> 82,478,573
+254,390,290 -> 82,366,327

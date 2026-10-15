@@ -684,6 +684,8 @@ struct _osr_frame {
 
 using _osr = std::vector<_osr_frame>;
 
+constexpr float POS_DEFAULT_X{ 256.f }, POS_DEFAULT_Y{ -500.f };
+
 static_assert(sizeof(_osr_frame) == 16, "replay_crc hashes frames as 16 bytes");
 
 inline u32 crc32c(u32 crc, const void* data, size_t size) {

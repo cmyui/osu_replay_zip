@@ -93,6 +93,10 @@ static bool decode_frames(const std::vector<u8>& raw_bytes, const u32 options, _
 			if (const auto& part{ stream_data[tag] }; part.size())
 				crc = crc32c_part(crc, part.data(), part.size());
 
+		const u32 crc_flags{ header->flags };
+
+		crc = crc32c(crc, &crc_flags, sizeof(crc_flags));
+
 		if (crc != header->crc)
 			return false;
 

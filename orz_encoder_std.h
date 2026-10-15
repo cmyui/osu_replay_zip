@@ -67,9 +67,17 @@ namespace standard {
 		std::vector<int> table;
 		u32 grid{};
 		bool relax{};
+		bool start{};
+		bool start_time{};
 	};
 
-	static _shared_streams shared_streams(const _osr& r, const u32 flags, orz_state& state) {
+	inline bool starts_at_start(const _osr& r) {
+
+		return r.size() > 2 && same_bits(r[0].x, POS_DEFAULT_X) && same_bits(r[0].y, POS_DEFAULT_Y) &&
+			same_bits(r[1].x, POS_DEFAULT_X) && same_bits(r[1].y, POS_DEFAULT_Y);
+	}
+
+	static _shared_streams shared_streams(const _osr& r, const u32 flags, orz_state& state, bool start, bool start_time) {
 
 		_shared_streams sh{ { &state }, { &state }, &r };
 
@@ -77,7 +85,11 @@ namespace standard {
 		sh.time.flags = flags;
 
 		sh.delta = frame_time::deltas(r);
-		sh.table = frame_time::build_table(sh.delta);
+		sh.start = start;
+		sh.start_time = start_time;
+
+		// the first two deltas are not coded with start_time
+		sh.table = frame_time::build_table(std::span{ sh.delta }.subspan(start_time ? 2 : 0));
 		sh.grid = frame_time::pick_grid(sh.delta);
 
 		sh.repeated = repeat::flags(r);
@@ -231,6 +243,11 @@ namespace standard {
 		dspace::write_info(m, head);
 		write_autopilot(ap, head);
 
+		head.push_back(shared.start);
+
+		if (shared.start)
+			head.push_back(shared.start_time);
+
 		frames::_frame_data fd{ shared.delta, shared.keys, shared.repeated };
 
 		fd.moves = moves;
@@ -251,7 +268,7 @@ namespace standard {
 
 		}
 
-		const frames::_side side{ m.axis, shared.table, frame_time::_time_grid{ shared.grid }, shared.relax, ap };
+		const frames::_side side{ m.axis, shared.table, frame_time::_time_grid{ shared.grid }, shared.relax, ap, shared.start_time };
 
 		add_to_u8(head.data, frames::encode(fd, side, shared.delta.size(), values, state.exact_text));
 
@@ -272,7 +289,9 @@ namespace standard {
 
 			const u32 s{ shared.sample[i] };
 
-			crc = crc32c_frame(crc, { r[i].delta, p.st[0].decoded[s], p.st[1].decoded[s], r[i].keys });
+			const bool at_start{ shared.start && i < 2 };
+
+			crc = crc32c_frame(crc, { r[i].delta, at_start ? POS_DEFAULT_X : p.st[0].decoded[s], at_start ? POS_DEFAULT_Y : p.st[1].decoded[s], r[i].keys });
 
 		}
 
@@ -414,9 +433,29 @@ namespace standard {
 		return found;
 	}
 
-	void encode(const char* output_file, const _osr& r, const u32 flags, orz_state& state) {
+	void encode(const char* output_file, const _osr& original, const u32 flags, orz_state& state) {
 
-		const _shared_streams shared{ shared_streams(r, flags, state) };
+		const bool start{ starts_at_start(original) };
+		const bool start_time{ start && original[0].delta == 0 && original[1].delta == -1 };
+
+		_osr moved;
+
+		if (start) {
+
+			moved = original;
+
+			for (int k{}; k < 2; ++k) {
+
+				moved[k].x = moved[2].x;
+				moved[k].y = moved[2].y;
+
+			}
+
+		}
+
+		const _osr& r{ start ? moved : original };
+
+		const _shared_streams shared{ shared_streams(r, flags, state, start, start_time) };
 
 		const std::vector<int> dt{ repeat::sample_dt(shared.delta, shared.repeated) };
 
@@ -508,7 +547,7 @@ namespace standard {
 	
 	// the head of the frames stream: delta table, time grid and device model; rest: what follows from the next byte
 	inline bool read_head(std::span<const u8> data, std::vector<int>& table, u32& grid, dspace::_model_info& info,
-		autopilot::_params& ap, std::span<const u8>& rest) {
+		autopilot::_params& ap, bool& start, bool& start_time, std::span<const u8>& rest) {
 
 		const _bit_view head{ data };
 
@@ -518,6 +557,9 @@ namespace standard {
 
 		if (!dspace::read_info(head, bit, info) || !read_autopilot(head, bit, ap))
 			return false;
+
+		start = bit < head.max_size() && head[bit++];
+		start_time = start && bit < head.max_size() && head[bit++];
 
 		rest = data.subspan(std::min(data.size(), (bit + 7) / 8));
 
@@ -531,12 +573,15 @@ namespace standard {
 		u32 grid{};
 		std::span<const u8> rest;
 
-		if (!read_head(stream_data[orz_tag::frames], side.table, grid, info, side.ap, rest))
+		bool start{}, start_time{};
+
+		if (!read_head(stream_data[orz_tag::frames], side.table, grid, info, side.ap, start, start_time, rest))
 			return R.empty();
 
 		side.axis = info.axis;
 		side.grid = frame_time::_time_grid{ grid };
 		side.relax = (header->flags & ORZ_FLAG::relax) != 0;
+		side.start_time = start_time;
 
 		frames::_frame_data fd{};
 		frames::_reader reader{ rest, fd, side, R.size() };
@@ -563,6 +608,13 @@ namespace standard {
 
 			R[i].delta = fd.delta[i];
 			R[i].keys = fd.keys[i] ^ ((fd.keys[i] >> 2) & 3);
+
+		}
+
+		for (size_t i{}; start && i < std::min<size_t>(2, R.size()); ++i) {
+
+			R[i].x = POS_DEFAULT_X;
+			R[i].y = POS_DEFAULT_Y;
 
 		}
 

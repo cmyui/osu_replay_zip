@@ -48,6 +48,7 @@ namespace frames {
 		frame_time::_time_grid grid{ 0 };
 		bool relax{};
 		autopilot::_params ap{};
+		bool start_time{};
 	};
 
 	struct _models {
@@ -751,7 +752,10 @@ namespace frames {
 				// the repeat flags of the last three frames (2 before the first)
 				const u64 r{ ((f >= 1 ? (u64)fd.repeated[f - 1] : 2) * 3 + (f >= 2 ? (u64)fd.repeated[f - 2] : 2)) * 3 + (f >= 3 ? (u64)fd.repeated[f - 3] : 2) };
 
-				fd.delta[f] = time.code(c, M.time, std::span{ fd.delta }.first(f), encoding ? fd.delta[f] : 0, phase, changed, kc1, r);
+				if (side.start_time && f < 2)
+					fd.delta[f] = f ? -1 : 0;
+				else
+					fd.delta[f] = time.code(c, M.time, std::span{ fd.delta }.first(f), encoding ? fd.delta[f] : 0, phase, changed, kc1, r);
 
 			}
 

@@ -161,6 +161,10 @@ struct _orz_construct {
 
 		}
 
+		const u32 crc_flags{ (u32)flags };
+
+		crc = crc32c(crc, &crc_flags, sizeof(crc_flags));
+
 		bit_stream h{};
 
 		write_bucket(ORZ_VERSION, h, 4, 8);
