@@ -16,6 +16,36 @@
 
 namespace dspace {
 
+	// std::llround without the CRT call (v - trunc(v) is exact)
+	FORCEINLINE i64 round_i64(double v) {
+
+		if (!(std::abs(v) < 4e18))
+			return std::llround(v);
+
+		const i64 t{ (i64)v };
+		const double f{ v - (double)t };
+
+		return t + (f >= 0.5) - (f <= -0.5);
+	}
+
+	// std::nextafter towards +-infinity on the float's bits
+	FORCEINLINE float next_up(float x) {
+
+		if (x != x || x == INFINITY)
+			return x;
+
+		if (x == 0.f)
+			return std::bit_cast<float>(1u);
+
+		const u32 b{ std::bit_cast<u32>(x) };
+
+		return std::bit_cast<float>(x > 0.f ? b + 1 : b - 1);
+	}
+
+	FORCEINLINE float next_down(float x) {
+		return -next_up(-x);
+	}
+
 	enum class axis_mode : u8 {
 		none = 0,
 
@@ -150,7 +180,7 @@ namespace dspace {
 	}
 
 	FORCEINLINE i64 rational_k(const axis_params& p, float x) {
-		return std::llround(((double)x * p.rational.D - p.rational.b) / p.rational.a);
+		return round_i64(((double)x * p.rational.D - p.rational.b) / p.rational.a);
 	}
 
 	// tablet/touch screen - all absolute postional devices
@@ -224,12 +254,12 @@ namespace dspace {
 		double pos{ (double)x * p.field.scale + p.field.off };
 
 		if (p.tablet.mapping == tablet_mapping::window)
-			return std::llround(((pos / p.tablet.span) * 65536.0 - 32768.0) / p.tablet.speed + 32768.0);
+			return round_i64(((pos / p.tablet.span) * 65536.0 - 32768.0) / p.tablet.speed + 32768.0);
 
 		if (p.tablet.speed != 1.f)
 			pos = (pos - p.tablet.half) / p.tablet.speed + p.tablet.half;
 
-		return std::llround((pos - p.tablet.origin) * 65536.0 / p.tablet.span);
+		return round_i64((pos - p.tablet.origin) * 65536.0 / p.tablet.span);
 	}
 
 	constexpr i64 MOUSE_MAX_REPORTS{ 1ll << 16 };
@@ -240,7 +270,7 @@ namespace dspace {
 
 		const double want{ std::clamp((double)dt * p.mouse.poll / 1000.0, 1.0, (double)MOUSE_MAX_REPORTS) };
 
-		return std::clamp<i64>(std::llround(want), 1, std::min(n, MOUSE_MAX_REPORTS));
+		return std::clamp<i64>(round_i64(want), 1, std::min(n, MOUSE_MAX_REPORTS));
 	}
 
 	inline float mouse_advance(const axis_params& p, float X, i64 dk, int dt) {
@@ -270,7 +300,7 @@ namespace dspace {
 		j = std::clamp(j, -MOUSE_SLACK_RANGE, MOUSE_SLACK_RANGE);
 
 		for (int q{}; q < (j < 0 ? -j : j); ++q)
-			Y = std::nextafter(Y, j < 0 ? -INFINITY : INFINITY);
+			Y = j < 0 ? next_down(Y) : next_up(Y);
 
 		return Y;
 	}
@@ -295,7 +325,7 @@ namespace dspace {
 
 		for (int s{ 1 }; s <= range; ++s) {
 
-			up = std::nextafter(up, INFINITY);
+			up = next_up(up);
 
 			if (fits(up)) {
 
@@ -305,7 +335,7 @@ namespace dspace {
 				return true;
 			}
 
-			down = std::nextafter(down, -INFINITY);
+			down = next_down(down);
 
 			if (fits(down)) {
 
@@ -596,7 +626,7 @@ namespace dspace {
 			bool escaped{ i == 0 };
 
 			const i64 dk{ escaped ? 0 :
-				std::llround(std::clamp(((double)x * p.field.scale + p.field.off - X) / p.mouse.sens, -1e7, 1e7))
+				round_i64(std::clamp(((double)x * p.field.scale + p.field.off - X) / p.mouse.sens, -1e7, 1e7))
 			};
 
 			float pred{ NAN };

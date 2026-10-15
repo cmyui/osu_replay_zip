@@ -4,6 +4,7 @@
 #include <array>
 #include <cmath>
 #include <map>
+#include <numeric>
 #include <set>
 #include <span>
 #include <unordered_map>
@@ -28,7 +29,7 @@ namespace standard {
 
 			for (double x : p) {
 
-				const double k{ std::round((x - c) / s) };
+				const double k{ (double)dspace::round_i64((x - c) / s) };
 
 				if (std::abs(x - (k * s + c)) > win)
 					continue;
@@ -429,9 +430,21 @@ namespace standard {
 
 			if (!state.exact_text) {
 
-				const double spacing{ (double)std::nextafter(a, INFINITY) - a };
+				const double spacing{ (double)dspace::next_up(a) - a };
 
-				const double printed{ std::pow(10.0, std::floor(std::log10((double)a)) - 6) };
+				
+				static const auto P10 = [] {
+
+					std::array<double, 100> t{};
+
+					for (int e{ -60 }; e < 40; ++e)
+						t[e + 60] = std::pow(10.0, e);
+
+					return t;
+				}();
+
+				const size_t d{ (size_t)(std::upper_bound(P10.begin(), P10.end(), (double)a) - P10.begin()) - 1 };
+				const double printed{ P10[d - 6] };
 
 				if (printed / spacing > 2.2)
 					continue;
@@ -471,7 +484,7 @@ namespace standard {
 
 		const double q{ v / step };
 
-		return std::abs(q - std::round(q)) <= tol;
+		return std::abs(q - (double)dspace::round_i64(q)) <= tol;
 	}
 	
 	struct virtual_group {
@@ -501,11 +514,11 @@ namespace standard {
 			float lo{ v[j] }, hi{ v[j] };
 			int n{};
 
-			for (; n < 64 && b[j].contains(std::nextafter(lo, -INFINITY)); ++n)
-				lo = std::nextafter(lo, -INFINITY);
+			for (; n < 64 && b[j].contains(dspace::next_down(lo)); ++n)
+				lo = dspace::next_down(lo);
 
-			for (; n < 64 && b[j].contains(std::nextafter(hi, INFINITY)); ++n)
-				hi = std::nextafter(hi, INFINITY);
+			for (; n < 64 && b[j].contains(dspace::next_up(hi)); ++n)
+				hi = dspace::next_up(hi);
 
 			if (n < 64)
 				f = { lo, hi, true };
@@ -519,7 +532,7 @@ namespace standard {
 
 		const float f{ (float)std::abs(a) };
 
-		return (double)std::nextafter(f, INFINITY) - (double)f;
+		return (double)dspace::next_up(f) - (double)f;
 	}
 
 	static int virtual_lb(const std::vector<lb_frame>& fr, const virtual_group& G, std::vector<u16>& votes) {
@@ -565,16 +578,16 @@ namespace standard {
 			int n1{}, n2{}, n3{}, n4{};
 
 			for (; n1 < 64 && field(plo) >= F.flo; ++n1)
-				plo = std::nextafter(plo, -INFINITY);
+				plo = dspace::next_down(plo);
 
 			for (; n2 < 64 && field(plo) < F.flo; ++n2)
-				plo = std::nextafter(plo, INFINITY);
+				plo = dspace::next_up(plo);
 
 			for (; n3 < 64 && field(phi) <= F.fhi; ++n3)
-				phi = std::nextafter(phi, INFINITY);
+				phi = dspace::next_up(phi);
 
 			for (; n4 < 64 && field(phi) > F.fhi; ++n4)
-				phi = std::nextafter(phi, -INFINITY);
+				phi = dspace::next_down(phi);
 
 			if (n1 == 64 || n2 == 64 || n3 == 64 || n4 == 64 || !std::isfinite(plo) || !std::isfinite(phi))
 				continue;
@@ -1222,7 +1235,39 @@ namespace standard {
 
 		size_t chosen_cost{ SIZE_MAX };
 
+		std::vector<dspace::axis_params> finals;
+
 		for (const auto& q : cands) {
+
+			// a desktop tablet at speed 1 fits the same every span / gcd(span, 65536) - try the one nearest 0 first
+			if (q.mode == dspace::axis_mode::absolute && q.tablet.mapping == dspace::tablet_mapping::desktop &&
+				q.tablet.speed == 1.f && q.tablet.span >= 1.f && q.tablet.span == std::floor(q.tablet.span)) {
+
+				const i64 span{ (i64)q.tablet.span };
+				const i64 period{ span / (i64)std::gcd((u64)span, (u64)65536) };
+				const i64 o{ (i64)q.tablet.origin };
+
+				i64 c{ ((o % period) + period) % period };
+
+				if (c * 2 > period)
+					c -= period;
+
+				if (c != o) {
+
+					auto r{ q };
+
+					r.tablet.origin = (float)c;
+					finals.push_back(r);
+
+				}
+
+			}
+
+			finals.push_back(q);
+
+		}
+
+		for (const auto& q : finals) {
 
 			auto st{ dspace::encode_axis(q, vals, dt, state.exact_text, bounds) };
 
