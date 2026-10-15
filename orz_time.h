@@ -129,11 +129,19 @@ namespace frame_time {
 
 		small_write<5>((u32)table.size(), t);
 
-		for (const int v : table)
-			small_write<5>((u32)std::abs(v), t);
+		
+		for (const int v : table) {
 
-		for (const int v : table)
-			t.push_back(v < 0);
+			if (v >= 0)
+				small_write<5>((u32)v + 1, t);
+			else {
+
+				small_write<5>(0, t);
+				small_write<5>(~(u32)v, t);
+
+			}
+
+		}
 
 		for (int b{}; b < 3; ++b)
 			t.push_back((grid >> b) & 1);
@@ -143,14 +151,15 @@ namespace frame_time {
 	// from bit `bit` of t, which ends past it
 	inline std::vector<int> read_table(const _bit_view t, size_t& bit, u32& grid) {
 
-		std::vector<int> table(std::min<size_t>(small_read<5>(t, bit), t.max_size() / 6));
+		std::vector<int> table(std::min<size_t>(small_read<5>(t, bit), t.max_size() / 5));
 
-		for (auto& v : table)
-			v = (int)small_read<5>(t, bit);
+		for (auto& v : table) {
 
-		for (auto& v : table)
-			if (small_read<1>(t, bit))
-				v = (int)(0u - (u32)v); // negate without overflow
+			const u32 u{ small_read<5>(t, bit) };
+
+			v = (int)(u ? u - 1 : ~small_read<5>(t, bit));
+
+		}
 
 		grid = 0;
 
