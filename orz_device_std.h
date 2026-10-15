@@ -652,7 +652,7 @@ namespace standard {
 	// tries to find the best model for one axis.
 	// failing to find one is the huge perf problem - having to try and bruteforce an acceptable solution
 	static dspace::axis_params detect_axis_model(orz_state& state, std::span<const float> vals, std::span<const int> dt,
-		int axis, const dspace::axis_params* other, dspace::axis_streams& streams, bool virtual_desktops = true) {
+		int axis, const dspace::axis_params* other, dspace::axis_streams& streams, bool virtual_desktops = true, bool refine = false) {
 
 		const dspace::axis_params none{};
 
@@ -676,11 +676,58 @@ namespace standard {
 		if (!fit_axis_step(p, s, c) && !reuse_absolute)
 			return none;
 
+		std::vector<std::pair<double, double>> steps{ { s, c } };
+		
+		if (refine) {
+
+			steps.clear();
+
+			std::vector<double> d;
+
+			for (size_t i{ 1 }; i < p.size(); ++i)
+				if (const double v{ std::abs((double)p[i] - p[i - 1]) }; v > 0.5 * s && v < 300.)
+					d.push_back(v);
+
+			if (d.size() < 100)
+				return none;
+
+			const auto at{ d.begin() + d.size() / 10 };
+
+			std::nth_element(d.begin(), at, d.end());
+
+			const int k{ (int)(*at / s + 0.5) };
+
+			if (k < 4 || k > 1000)
+				return none;
+
+			for (const int j : { 1, -1 }) {
+
+				constexpr double TAU{ 6.283185307179586 };
+
+				double q{ s * k / (k + j) }, cs{}, sn{};
+
+				for (const double x : p) {
+
+					cs += std::cos(TAU * x / q);
+					sn += std::sin(TAU * x / q);
+
+				}
+
+				double qc{ std::atan2(sn, cs) / TAU * q };
+
+				refine_tight(p, q, qc);
+
+				steps.push_back({ q, qc });
+
+			}
+
+		}
+
 		std::vector<dspace::axis_params> cands;
 
 		// check for a simple rational term first
 
-		for (int D{ 1 }; D <= 65536; ++D) {
+		for (int D{ 1 }; !refine && D <= 65536; ++D) {
 
 			const double a{ s * D };
 
@@ -759,6 +806,7 @@ namespace standard {
 
 			}
 
+			for (const auto& [s, c] : steps)
 			for (const auto& [W, H] : PM_RES) {
 
 				const auto [ratio, ox, oy] { dspace::playfield(W, H) };
@@ -875,6 +923,7 @@ namespace standard {
 
 			}
 
+			for (const auto& [s, c] : steps)
 			for (const auto& [W, H] : PM_RES) {
 
 				const auto [ratio, ox, oy] { dspace::playfield(W, H) };
@@ -1265,6 +1314,16 @@ namespace standard {
 
 			finals.push_back(q);
 
+			// the game may keep pos - off unrounded so we have to try both (JIT differences?)
+			if (q.mode == dspace::axis_mode::mouse || q.mode == dspace::axis_mode::absolute) {
+
+				auto r{ q };
+
+				r.field.wide = !r.field.wide;
+				finals.push_back(r);
+
+			}
+
 		}
 
 		for (const auto& q : finals) {
@@ -1287,9 +1346,159 @@ namespace standard {
 
 		}
 
+		// we are escaping often, the step may be a neighbouring lattice
+		if (!refine && s > 0. && (chosen.mode == dspace::axis_mode::none || best_streams.escapes.size() * 100 > vals.size())) {
+
+			dspace::axis_streams rs;
+
+			if (const auto r{ detect_axis_model(state, vals, dt, axis, other, rs, false, true) }; r.mode != dspace::axis_mode::none) {
+
+				if (const size_t cost{ axis_cost(rs, dt, axis, state.exact_text) }; cost < chosen_cost) {
+
+					chosen = r;
+					best_streams = std::move(rs);
+
+				}
+
+			}
+
+		}
+
 		streams = std::move(best_streams);
 
 		return chosen;
+	}
+
+	static void refine_window(orz_state& state, const std::vector<float> vals[2], const std::vector<int>& dt,
+		dspace::axis_params& px, dspace::axis_params& py, dspace::axis_streams ws[2]) {
+
+		dspace::axis_params* pa[2]{ &px, &py };
+
+		const auto window_tablet = [](const dspace::axis_params& q) {
+			return q.mode == dspace::axis_mode::absolute && q.tablet.mapping == dspace::tablet_mapping::window;
+		};
+
+		const int t{ window_tablet(px) ? 0 : window_tablet(py) ? 1 : -1 };
+
+		if (t < 0 || (ws[0].escapes.size() + ws[1].escapes.size()) * 100 <= vals[0].size())
+			return;
+
+		const dspace::axis_params tab{ *pa[t] };
+
+		double sx{}, cx{};
+
+		if (t == 0)
+			sx = (double)tab.tablet.speed * tab.tablet.span / 65536. / tab.field.scale;
+		else if (!fit_axis_step(std::span<const float>{ vals[0] }.subspan(2), sx, cx))
+			return;
+
+		const double aspect{ sx / ((double)tab.tablet.speed * 480. / 65536.) };
+
+		if (!(aspect > 0.2 && aspect < 5.))
+			return;
+
+		std::vector<float> tv[2];
+		std::vector<int> tdt[2];
+		std::vector<dotnet::text_bounds> tb[2];
+
+		for (int a{}; a < 2; ++a) {
+
+			auto pick{ spread_frames(informative_frames(state, vals[a]), 128) };
+
+			if (pick.size() < 32) {
+
+				pick.clear();
+
+				for (size_t i{ 2 }; i < vals[a].size(); i += std::max<size_t>(1, vals[a].size() / 128))
+					pick.push_back(i);
+
+			}
+
+			for (const size_t i : pick) {
+
+				tv[a].push_back(vals[a][i]);
+				tdt[a].push_back(dt[i]);
+				tb[a].push_back(dotnet::text_bounds{ vals[a][i], state.exact_text });
+
+			}
+
+		}
+
+		const auto make = [&](int W, int H, int a) {
+
+			const auto [ratio, ox, oy] { dspace::playfield(W, H) };
+
+			auto q{ tab };
+
+			q.field.scale = ratio;
+			q.field.off = a ? oy : ox;
+			q.tablet.span = (float)(a ? H : W);
+			q.tablet.half = (float)((a ? H : W) / 2);
+
+			return q;
+		};
+
+		std::vector<std::pair<size_t, std::array<int, 2>>> scored;
+
+		for (int H{ 240 }; H <= 4320; ++H) {
+
+			const int W{ (int)std::lround(H * aspect) };
+
+			if (std::abs(W - H * aspect) > 0.02)
+				continue;
+
+			size_t esc{};
+
+			for (int a{}; a < 2; ++a)
+				esc += dspace::encode_axis(make(W, H, a), tv[a], tdt[a], state.exact_text, tb[a]).escapes.size();
+
+			scored.push_back({ esc, { W, H } });
+
+		}
+
+		std::sort(scored.begin(), scored.end());
+
+		size_t best_cost{};
+
+		for (int a{}; a < 2; ++a)
+			best_cost += axis_cost(ws[a], dt, a, state.exact_text);
+
+		for (size_t i{}; i < std::min<size_t>(scored.size(), 4); ++i) {
+
+			const auto [W, H] { scored[i].second };
+
+			dspace::axis_params q[2];
+			dspace::axis_streams st[2];
+			size_t cost{};
+
+			for (int a{}; a < 2; ++a) {
+
+				q[a] = make(W, H, a);
+				st[a] = dspace::encode_axis(q[a], vals[a], dt, state.exact_text);
+
+				if (st[a].escapes.size() * 2 > vals[a].size())
+					cost = SIZE_MAX;
+
+				if (cost != SIZE_MAX)
+					cost += axis_cost(st[a], dt, a, state.exact_text);
+
+			}
+
+			if (cost < best_cost) {
+
+				best_cost = cost;
+
+				for (int a{}; a < 2; ++a) {
+
+					*pa[a] = q[a];
+					ws[a] = std::move(st[a]);
+
+				}
+
+			}
+
+		}
+
 	}
 
 	// get a lot of escapes when the window moves or the input device swaps, etc

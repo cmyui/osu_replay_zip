@@ -379,6 +379,9 @@ namespace standard {
 
 			}
 
+			if (px.mode != dspace::axis_mode::none || py.mode != dspace::axis_mode::none)
+				refine_window(state, vals, dt, px, py, ws);
+
 			whole.axis[0] = dspace::axis_model{ px };
 			whole.axis[1] = dspace::axis_model{ py };
 

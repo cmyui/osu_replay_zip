@@ -70,6 +70,7 @@ namespace dspace {
 	// field = (pixels - off) * (1 / scale), shared by mouse and tablet
 	struct field_map {
 		float scale, off;
+		bool wide; // pos - off stays unrounded (x87 register) before the multiply
 		bool operator==(const field_map&) const = default;
 	};
 
@@ -235,12 +236,24 @@ namespace dspace {
 		return a;
 	}
 
+	// GameField.Ratio as the x87 JIT returns it: Height / 384 unrounded, Height = 384 * (float)(H / 480)
+	inline double field_ratio_x87(const axis_params& p) {
+
+		const int H{ (int)std::lround((double)p.field.scale * 480.0) };
+		const float height{ 384.f * ((float)H / 480.f) };
+
+		return same_bits(height / 384.f, p.field.scale) ? (double)height / 384.0 : (double)p.field.scale;
+	}
+
 	inline float to_field(const axis_params& p, float pos) {
 
+		if (p.field.wide && (p.mode == axis_mode::mouse || p.mode == axis_mode::absolute))
+			return (float)(((double)pos - (double)p.field.off) * (1.0 / (double)p.field.scale));
+
 		const float d{ pos - p.field.off };
-				
+
 		if (p.mode == axis_mode::mouse || (p.mode == axis_mode::absolute && p.tablet.fp == float_unit::x87))
-			return (float)((double)d * (1.0 / (double)p.field.scale));
+			return (float)((double)d / field_ratio_x87(p));
 
 		const float inv{ 1.f / p.field.scale };
 
@@ -276,19 +289,54 @@ namespace dspace {
 		return std::clamp<i64>(round_i64(want), 1, std::min(n, MOUSE_MAX_REPORTS));
 	}
 
+	inline float window_size(const axis_params& p) {
+
+		const int H{ (int)std::lround((double)p.field.scale * 480.0) };
+
+		if (H <= 0 || H > 20000)
+			return 0.f;
+
+		const auto f{ playfield(0, H) };
+
+		if (!same_bits(f.ratio, p.field.scale))
+			return 0.f;
+
+		if (same_bits(f.off_y, p.field.off))
+			return (float)H;
+
+		const int W{ (int)std::lround(2.0 * p.field.off + 512.0 * ((double)H / 480.0)) };
+
+		if (W > 0 && W < 40000 && same_bits(playfield(W, H).off_x, p.field.off))
+			return (float)W;
+
+		return 0.f;
+	}
+
+	inline float mouse_advance_m(const axis_params& p, float X, i64 dk, i64 m);
+
 	inline float mouse_advance(const axis_params& p, float X, i64 dk, int dt) {
+
+		return dk == 0 ? X : mouse_advance_m(p, X, dk, mouse_reports(p, dk, dt));
+	}
+
+	inline float mouse_advance_m(const axis_params& p, float X, i64 dk, i64 m) {
 
 		if (dk == 0)
 			return X;
 
 		const i64 n{ dk < 0 ? -dk : dk }, sgn{ dk < 0 ? -1 : 1 };
-		const i64 m{ mouse_reports(p, dk, dt) };
+
+		// while playing the cursor is clamped to the window after every report (RawMouseHandler)
+		const float size{ window_size(p) };
 
 		for (i64 q{}; q < m; ++q) {
 
 			const i64 c{ n / m + (q < n % m) };
 
 			X = (float)((double)X + (double)(sgn * c) * (double)p.mouse.sens);
+
+			if (size > 0.f)
+				X = std::clamp(X, 0.f, size - 1.f);
 
 		}
 
@@ -311,6 +359,84 @@ namespace dspace {
 	// search order is 0, 1, -1, 2, -2, etc
 	FORCEINLINE int slack_at(int i) {
 		return (i & 1) ? (i + 1) / 2 : -(i / 2);
+	}
+
+	struct _mouse_candidates {
+
+		const axis_params& p;
+		float X;
+		i64 dk, n, m;
+		float list[20];
+		int count{}, next_split{};
+				
+		_mouse_candidates(const axis_params& p_, float X_, i64 dk_, int dt, float first) : p{ p_ }, X{ X_ }, dk{ dk_ } {
+
+			list[count++] = first;
+			next_split = 1;
+
+			n = dk < 0 ? -dk : dk;
+			
+			if (dk == 0) {
+
+				m = 1;
+				next_split = 99;
+
+			} else
+				m = mouse_reports(p, dk, dt);
+
+		}
+				
+		bool get(int k, float& out) {
+
+			if (k > 2 * MOUSE_SLACK_RANGE)
+				return false;
+
+			constexpr i64 OFFSETS[]{ 0, -1, 1, -2, 2, -3, 3, -4, 4, -5, 5, -6, 6, -7, 7, -8, 8 };
+
+			while (count <= k && next_split < (int)std::size(OFFSETS)) {
+
+				const i64 r{ m + OFFSETS[next_split++] };
+
+				if (r < 1 || r > n || r > MOUSE_MAX_REPORTS)
+					continue;
+
+				const float v{ mouse_advance_m(p, X, dk, r) };
+
+				bool seen{};
+
+				for (int q{}; q < count; ++q)
+					seen |= std::bit_cast<u32>(list[q]) == std::bit_cast<u32>(v);
+
+				if (!seen)
+					list[count++] = v;
+
+			}
+
+			if (k < count) {
+
+				out = list[k];
+
+				return true;
+			}
+
+			const int j{ k - count + 1 };
+
+			if (j > 2 * MOUSE_SLACK_RANGE)
+				return false;
+
+			out = nudge(list[0], slack_at(j));
+
+			return true;
+		}
+
+	};
+	
+	FORCEINLINE int slack_of_index(int k) {
+		return (int)rc::unzz((u64)k);
+	}
+
+	FORCEINLINE int slack_index(int v) {
+		return (int)rc::zz(v);
 	}
 
 	// first float within range ulps of Y (slack_at order) that fits, j = its offset; false leaves Y unchanged
@@ -363,6 +489,72 @@ namespace dspace {
 		ulp_search(Y, MOUSE_SEED_RANGE, j, [&](float v) { return b.contains(to_field(p, v)); });
 
 		return Y;
+	}
+
+	FORCEINLINE i64 mouse_dk(const axis_params& p, float x, float X) {
+		return round_i64(std::clamp(((double)x * p.field.scale + p.field.off - X) / p.mouse.sens, -1e7, 1e7));
+	}
+
+	inline bool first_fit(_mouse_candidates& cand, const dotnet::text_bounds& b, int& k, float& Y) {
+
+		for (; cand.dk != 0 || k < 1; ++k) {
+
+			if (!cand.get(k, Y))
+				return false;
+
+			if (b.contains(to_field(cand.p, Y)))
+				return true;
+
+		}
+
+		return false;
+	}
+
+	// rough bits of a candidate index in the slack stream
+	FORCEINLINE double slack_cost(int k) {
+		return k == 0 ? 0.3 : 2.0 + std::log2(1.0 + k);
+	}
+
+	inline double mouse_next_cost(const axis_params& p, float X, float x1, const dotnet::text_bounds& b1, int dt1) {
+
+		const i64 dk{ mouse_dk(p, x1, X) };
+
+		if (dk == 0)
+			return b1.contains(to_field(p, X)) ? 0.0 : 40.0;
+
+		_mouse_candidates cand{ p, X, dk, dt1, mouse_advance(p, X, dk, dt1) };
+
+		int k{};
+		float Y{};
+
+		return first_fit(cand, b1, k, Y) ? slack_cost(k) : 40.0;
+	}
+
+	// quickly check surrounding cand's to see if there is a better fit
+	inline void mouse_finalize(_mouse_candidates& cand, const dotnet::text_bounds& b, float x1, const dotnet::text_bounds& b1, int dt1,
+		int& k, float& Y) {
+
+		const double first_next{ mouse_next_cost(cand.p, Y, x1, b1, dt1) };
+
+		if (first_next <= slack_cost(0))
+			return;
+
+		double best{ slack_cost(k) + first_next };
+
+		float v{};
+
+		for (int q{ k + 1 }, fits{ 1 }; fits < 6 && first_fit(cand, b, q, v); ++q, ++fits) {
+
+			if (const double c{ slack_cost(q) + mouse_next_cost(cand.p, v, x1, b1, dt1) }; c < best) {
+
+				best = c;
+				Y = v;
+				k = q;
+
+			}
+
+		}
+
 	}
 
 	struct axis_streams {
@@ -628,9 +820,7 @@ namespace dspace {
 
 			bool escaped{ i == 0 };
 
-			const i64 dk{ escaped ? 0 :
-				round_i64(std::clamp(((double)x * p.field.scale + p.field.off - X) / p.mouse.sens, -1e7, 1e7))
-			};
+			const i64 dk{ escaped ? 0 : mouse_dk(p, x, X) };
 
 			float pred{ NAN };
 
@@ -649,14 +839,18 @@ namespace dspace {
 				const float Y0{ mouse_advance(p, X, dk, dt[i]) };
 				pred = to_field(p, Y0);
 
-				// moves may be off by a few ulps (slack)
-				float Y{ Y0 };
-				int j;
+				_mouse_candidates cand{ p, X, dk, dt[i], Y0 };
 
-				if (ulp_search(Y, dk == 0 ? 0 : MOUSE_SLACK_RANGE, j, [&](float v) { return b.contains(to_field(p, v)); })) {
+				float Y{};
+				int k{};
+
+				if (first_fit(cand, b, k, Y)) {
+
+					if (decoded && dk != 0 && i + 1 < vals.size())
+						mouse_finalize(cand, b, vals[i + 1], bound(i + 1), dt[i + 1], k, Y);
 
 					if (dk != 0)
-						o.slack.push_back(j);
+						o.slack.push_back(slack_of_index(k));
 
 					X = Y;
 
@@ -806,7 +1000,15 @@ namespace dspace {
 
 			const float Y0{ mouse_advance(p, X, dk, dt[i]) };
 
-			X = dk == 0 ? Y0 : nudge(Y0, s < slack.size() ? slack[s++] : 0);
+			if (dk != 0) {
+
+				_mouse_candidates cand{ p, X, dk, dt[i], Y0 };
+
+				if (!cand.get(slack_index(s < slack.size() ? slack[s++] : 0), X))
+					return false;
+
+			} else
+				X = Y0;
 
 			out[i] = to_field(p, X);
 
@@ -839,6 +1041,7 @@ namespace dspace {
 
 			write_u(hundredths(p.mouse.sens), o);
 			write_u((u32)p.mouse.poll, o);
+			o.push_back(p.field.wide);
 			write_float(p.field.scale, o);
 			write_float(p.field.off, o);
 
@@ -848,6 +1051,7 @@ namespace dspace {
 
 			o.push_back(p.tablet.mapping == tablet_mapping::window);
 			o.push_back(p.tablet.fp == float_unit::x87);
+			o.push_back(p.field.wide);
 
 			write_u((u32)p.tablet.span, o);
 			write_u((u32)rc::zz((int)p.tablet.origin), o);
@@ -878,6 +1082,7 @@ namespace dspace {
 
 			p.mouse.sens = from_hundredths(read_u(in, i));
 			p.mouse.poll = (float)read_u(in, i);
+			p.field.wide = in[i++] != 0;
 			p.field.scale = read_float(in, i);
 			p.field.off = read_float(in, i);
 
@@ -887,6 +1092,7 @@ namespace dspace {
 
 			p.tablet.mapping = in[i++] ? tablet_mapping::window : tablet_mapping::desktop;
 			p.tablet.fp = in[i++] ? float_unit::x87 : float_unit::sse;
+			p.field.wide = in[i++] != 0;
 			p.tablet.span = (float)read_u(in, i);
 			p.tablet.origin = (float)rc::unzz(read_u(in, i));
 			p.tablet.half = (float)read_u(in, i);
