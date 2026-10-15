@@ -1025,9 +1025,13 @@ namespace dspace {
 	inline u32 hundredths(float v) { return (u32)std::lround((double)v * 100.0); }
 	inline float from_hundredths(u32 v) { return (float)((double)v / 100.0); }
 
+	inline bool on_hundredths(float v) {
+		return v > 0.f && v < 1e6f && same_bits(from_hundredths(hundredths(v)), v);
+	}
+
 	inline void write_setting(float v, bit_stream& o) {
 
-		const bool grid{ v > 0.f && v < 1e6f && same_bits(from_hundredths(hundredths(v)), v) };
+		const bool grid{ on_hundredths(v) };
 
 		o.push_back(!grid);
 

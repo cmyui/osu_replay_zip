@@ -337,6 +337,52 @@ namespace standard {
 		return true;
 	}
 
+	static void neighbour_steps(const std::span<const float> p, double s, std::vector<std::pair<double, double>>& steps) {
+
+		std::vector<double> d; d.reserve(p.size());
+
+		for (size_t i{ 1 }; i < p.size(); ++i)
+			if (const double v{ std::abs((double)p[i] - p[i - 1]) }; v > 0.5 * s && v < 300.)
+				d.push_back(v);
+
+		int k{};
+
+		if (d.size() >= 100) {
+
+			const auto at{ d.begin() + d.size() / 10 };
+
+			std::nth_element(d.begin(), at, d.end());
+
+			k = (int)(*at / s + 0.5);
+
+		}
+
+		for (const int j : { 1, -1 }) {
+
+			if (k < 4 || k > 1000)
+				break;
+
+			constexpr double TAU{ 6.283185307179586 };
+
+			double q{ s * k / (k + j) }, cs{}, sn{};
+
+			for (const double x : p) {
+
+				cs += std::cos(TAU * x / q);
+				sn += std::sin(TAU * x / q);
+
+			}
+
+			double qc{ std::atan2(sn, cs) / TAU * q };
+
+			refine_tight(p, q, qc);
+
+			steps.push_back({ q, qc });
+
+		}
+
+	}
+
 	// rough coded size of an axis in bits, for comparing models: Elias gamma lengths of the move predictor's residuals,
 	// the slack, the gaps between escapes and their values
 	static size_t axis_cost(const dspace::axis_streams& a, std::span<const int> dt, int axis, bool exact_text) {
@@ -485,6 +531,19 @@ namespace standard {
 		const double q{ v / step };
 
 		return std::abs(q - (double)dspace::round_i64(q)) <= tol;
+	}
+
+	static int setting_values(double v, double tol, bool exact, float out[2]) {
+
+		int n{};
+
+		if (near_grid(v, 0.01, tol))
+			out[n++] = (float)(std::round(v * 100.) / 100.);
+
+		if (exact)
+			out[n++] = (float)v;
+
+		return n;
 	}
 	
 	struct virtual_group {
@@ -652,7 +711,7 @@ namespace standard {
 	// tries to find the best model for one axis.
 	// failing to find one is the huge perf problem - having to try and bruteforce an acceptable solution
 	static dspace::axis_params detect_axis_model(orz_state& state, std::span<const float> vals, std::span<const int> dt,
-		int axis, const dspace::axis_params* other, dspace::axis_streams& streams, bool virtual_desktops = true, bool refine = false) {
+		int axis, const dspace::axis_params* other, dspace::axis_streams& streams, bool virtual_desktops = true, bool refine = false, double fit_s = 0., double fit_c = 0.) {
 
 		const dspace::axis_params none{};
 
@@ -673,56 +732,18 @@ namespace standard {
 
 		double s{}, c{};
 
-		if (!fit_axis_step(p, s, c) && !reuse_absolute)
+		if (refine) {
+
+			s = fit_s;
+			c = fit_c;
+
+		} else if (!fit_axis_step(p, s, c) && !reuse_absolute)
 			return none;
 
 		std::vector<std::pair<double, double>> steps{ { s, c } };
 		
-		if (refine) {
-
-			std::vector<double> d;
-
-			for (size_t i{ 1 }; i < p.size(); ++i)
-				if (const double v{ std::abs((double)p[i] - p[i - 1]) }; v > 0.5 * s && v < 300.)
-					d.push_back(v);
-
-			int k{};
-
-			if (d.size() >= 100) {
-
-				const auto at{ d.begin() + d.size() / 10 };
-
-				std::nth_element(d.begin(), at, d.end());
-
-				k = (int)(*at / s + 0.5);
-
-			}
-
-			for (const int j : { 1, -1 }) {
-
-				if (k < 4 || k > 1000)
-					break;
-
-				constexpr double TAU{ 6.283185307179586 };
-
-				double q{ s * k / (k + j) }, cs{}, sn{};
-
-				for (const double x : p) {
-
-					cs += std::cos(TAU * x / q);
-					sn += std::sin(TAU * x / q);
-
-				}
-
-				double qc{ std::atan2(sn, cs) / TAU * q };
-
-				refine_tight(p, q, qc);
-
-				steps.push_back({ q, qc });
-
-			}
-
-		}
+		if (refine)
+			neighbour_steps(p, s, steps);
 
 		std::vector<dspace::axis_params> cands;
 
@@ -771,6 +792,9 @@ namespace standard {
 
 		constexpr size_t PREFIX{ 2000 };
 
+		// refine tries a sensitivity per window, ranks them on fewer frames
+		constexpr size_t REFINE_PREFIX{ 500 };
+
 		{ // window sizes where playfield scale turns the step into a 0.01 sensitivity
 
 			std::vector<dspace::axis_params> mouse;
@@ -814,23 +838,22 @@ namespace standard {
 
 				const double sens{ s * ratio };
 
-				if (sens < 0.05 || sens > 10.0 || (!refine && !near_grid(sens, 0.01, 0.03)))
+				float sv[2];
+				const int n_sens{ setting_values(sens, 0.03, refine, sv) };
+
+				if (sens < 0.05 || sens > 10.0 || n_sens == 0)
 					continue;
 
 				dspace::axis_params q{};
 
 				q.mode = dspace::axis_mode::mouse;
 				q.field.scale = ratio;
-				q.mouse.sens = (float)(std::round(sens * 100.) / 100.);
 				q.mouse.poll = 1000.f;
 				q.field.off = axis ? oy : ox;
 
-				if (near_grid(sens, 0.01, 0.03))
-					add(q);
+				for (int i{}; i < n_sens; ++i) {
 
-				if (refine) {
-
-					q.mouse.sens = (float)sens;
+					q.mouse.sens = sv[i];
 					add(q);
 
 				}
@@ -845,7 +868,7 @@ namespace standard {
 
 				for (const auto& q : mouse) {
 
-					const double sc{ prefix_score(state, q, vals, dt, bounds, PREFIX, best_score) };
+					const double sc{ prefix_score(state, q, vals, dt, bounds, refine ? REFINE_PREFIX : PREFIX, best_score) };
 
 					if (sc < best_score) {
 
@@ -867,7 +890,7 @@ namespace standard {
 
 					q.mouse.poll = poll;
 
-					const double sc{ prefix_score(state, q, vals, dt, bounds, PREFIX, best_score) };
+					const double sc{ prefix_score(state, q, vals, dt, bounds, refine ? REFINE_PREFIX : PREFIX, best_score) };
 
 					if (sc < best_score) {
 
@@ -954,20 +977,19 @@ namespace standard {
 
 					const double speed{ units / win };
 
-					if (speed > 0.05 && speed < 10. && (refine || near_grid(speed, 0.01, 0.01)) && near_grid(pos_c - win / 2., q, 0.05)) {
+					float sv[2];
+					const int n_speeds{ setting_values(speed, 0.01, refine, sv) };
+
+					if (speed > 0.05 && speed < 10. && n_speeds > 0 && near_grid(pos_c - win / 2., q, 0.05)) {
 
 						auto a{ t };
 
 						a.tablet.mapping = dspace::tablet_mapping::window;
 						a.tablet.span = (float)win;
-						a.tablet.speed = (float)(std::round(speed * 100.0) / 100.0);
 
-						if (near_grid(speed, 0.01, 0.01))
-							abs.push_back(a);
+						for (int i{}; i < n_speeds; ++i) {
 
-						if (refine) {
-
-							a.tablet.speed = (float)speed;
+							a.tablet.speed = sv[i];
 							abs.push_back(a);
 
 						}
@@ -981,17 +1003,11 @@ namespace standard {
 
 					const double speed{ units / span };
 
-					if (speed < 0.05 || speed > 10.0 || (!refine && !near_grid(speed, 0.01, 0.01)))
-						continue;
-
 					float sps[2];
-					int nsp{};
+					const int nsp{ setting_values(speed, 0.01, refine, sps) };
 
-					if (near_grid(speed, 0.01, 0.01))
-						sps[nsp++] = (float)(std::round(speed * 100.) / 100.);
-					
-					if (refine)
-						sps[nsp++] = (float)speed;
+					if (speed < 0.05 || speed > 10.0 || nsp == 0)
+						continue;
 
 					for (int si{}; si < nsp; ++si) {
 
@@ -1004,12 +1020,14 @@ namespace standard {
 
 						std::vector<int> origins;
 
-						for (int o{}; origins.size() < 4 && o <= 4000; ++o) {
+						const size_t max_origins{ refine && si + 1 == nsp ? 1u : 4u };
+
+						for (int o{}; origins.size() < max_origins && o <= 4000; ++o) {
 
 							if (near_grid(base - o, step, 0.03))
 								origins.push_back(o);
 
-							if (o && origins.size() < 4 && near_grid(base + o, step, 0.03))
+							if (o && origins.size() < max_origins && near_grid(base + o, step, 0.03))
 								origins.push_back(-o);
 
 						}
@@ -1356,17 +1374,16 @@ namespace standard {
 
 		}
 
-		for (const auto& q : finals) {
+		// keep q when it codes smaller
+		const auto consider = [&](const dspace::axis_params& q) {
 
 			auto st{ dspace::encode_axis(q, vals, dt, state.exact_text, bounds) };
 
 			// a model that escapes most frames is worse than text ordinals
 			if (st.escapes.size() * 2 > vals.size())
-				continue;
+				return;
 
-			const size_t cost{ axis_cost(st, dt, axis, state.exact_text) };
-
-			if (cost < chosen_cost) {
+			if (const size_t cost{ axis_cost(st, dt, axis, state.exact_text) }; cost < chosen_cost) {
 
 				chosen_cost = cost;
 				chosen = q;
@@ -1374,7 +1391,10 @@ namespace standard {
 
 			}
 
-		}
+		};
+
+		for (const auto& q : finals)
+			consider(q);
 
 		if (refine && chosen_cost != SIZE_MAX && (chosen.mode == dspace::axis_mode::mouse || chosen.mode == dspace::axis_mode::absolute)) {
 
@@ -1385,9 +1405,9 @@ namespace standard {
 			auto base{ chosen };
 			const float v0{ setting(base) };
 
-			if (!same_bits(dspace::from_hundredths(dspace::hundredths(v0)), v0)) {
+			if (!dspace::on_hundredths(v0)) {
 
-				constexpr size_t N{ 2000 };
+				constexpr size_t N{ 1000 };
 
 				double best{ prefix_score(state, chosen, vals, dt, bounds, N) };
 				i64 best_j{};
@@ -1405,7 +1425,9 @@ namespace standard {
 
 					const i64 from{ best_j };
 
-					for (int k{ -8 }; k <= 8; ++k) {
+					const int K{ stride == 64 ? 8 : 4 };
+
+					for (int k{ -K }; k <= K; ++k) {
 
 						if (k == 0)
 							continue;
@@ -1423,25 +1445,8 @@ namespace standard {
 
 				}
 
-				if (best_j != 0) {
-
-					const auto q{ at(best_j) };
-
-					auto st{ dspace::encode_axis(q, vals, dt, state.exact_text, bounds) };
-
-					if (st.escapes.size() * 2 <= vals.size()) {
-
-						if (const size_t cost{ axis_cost(st, dt, axis, state.exact_text) }; cost < chosen_cost) {
-
-							chosen_cost = cost;
-							chosen = q;
-							best_streams = std::move(st);
-
-						}
-
-					}
-
-				}
+				if (best_j != 0)
+					consider(at(best_j));
 
 			}
 
@@ -1452,7 +1457,7 @@ namespace standard {
 
 			dspace::axis_streams rs;
 
-			if (const auto r{ detect_axis_model(state, vals, dt, axis, other, rs, false, true) }; r.mode != dspace::axis_mode::none) {
+			if (const auto r{ detect_axis_model(state, vals, dt, axis, other, rs, false, true, s, c) }; r.mode != dspace::axis_mode::none) {
 
 				if (const size_t cost{ axis_cost(rs, dt, axis, state.exact_text) }; cost < chosen_cost) {
 
@@ -1481,21 +1486,86 @@ namespace standard {
 
 		const int t{ window_tablet(px) ? 0 : window_tablet(py) ? 1 : -1 };
 
-		if (t < 0 || (ws[0].escapes.size() + ws[1].escapes.size()) * 100 <= vals[0].size())
+		const auto lattice = [](const dspace::axis_params& q) {
+			return q.mode == dspace::axis_mode::absolute || q.mode == dspace::axis_mode::rational;
+		};
+
+		if (!lattice(px) && !lattice(py))
 			return;
 
-		const dspace::axis_params tab{ *pa[t] };
+		if ((ws[0].escapes.size() + ws[1].escapes.size()) * 100 <= vals[0].size())
+			return;
 
-		double sx{}, cx{};
+		dspace::axis_params tab{ t >= 0 ? *pa[t] : px.mode == dspace::axis_mode::absolute ? px : py };
+
+		tab.mode = dspace::axis_mode::absolute;
+
+		tab.tablet.mapping = dspace::tablet_mapping::window;
+		tab.tablet.origin = 0.f;
+
+		const std::span<const float> p[2]{ std::span<const float>{ vals[0] }.subspan(2), std::span<const float>{ vals[1] }.subspan(2) };
+
+		double sx{}, sy{}, c{};
 
 		if (t == 0)
 			sx = (double)tab.tablet.speed * tab.tablet.span / 65536. / tab.field.scale;
-		else if (!fit_axis_step(std::span<const float>{ vals[0] }.subspan(2), sx, cx))
+		else if (!fit_axis_step(p[0], sx, c))
 			return;
 
-		const double aspect{ sx / ((double)tab.tablet.speed * 480. / 65536.) };
+		if (t == 1)
+			sy = (double)tab.tablet.speed * 480. / 65536.;
+		else if (!fit_axis_step(p[1], sy, c))
+			return;
 
-		if (!(aspect > 0.2 && aspect < 5.))
+		std::vector<std::pair<double, double>> ys{ { sy, c } };
+
+		if (t != 1)
+			neighbour_steps(p[1], sy, ys);
+		
+		std::vector<std::pair<double, float>> setups;
+
+		for (const auto& [q, qc] : ys) {
+
+			const double aspect{ sx / q };
+
+			if (!(aspect > 0.2 && aspect < 5.))
+				continue;
+
+			if (t >= 0) {
+
+				setups.push_back({ aspect, tab.tablet.speed });
+
+				continue;
+			}
+
+			const double sp{ q * 65536. / 480. };
+
+			if (sp < 0.05 || sp > 10.)
+				continue;
+
+			float sv[2];
+
+			for (int i{}, n{ setting_values(sp, 0.01, true, sv) }; i < n; ++i)
+				setups.push_back({ aspect, sv[i] });
+
+		}
+		
+		if (t < 0) {
+
+			for (const double aspect : { 16. / 9., 16. / 10., 4. / 3., 5. / 4., 21. / 9., 3. / 2., 5. / 3. }) {
+
+				const double sp{ sx * 65536. / 480. / aspect };
+
+				float sv[2];
+
+				if (sp > 0.05 && sp < 10. && setting_values(sp, 0.01, false, sv) == 1)
+					setups.push_back({ aspect, sv[0] });
+
+			}
+
+		}
+
+		if (setups.empty())
 			return;
 
 		std::vector<float> tv[2];
@@ -1525,11 +1595,13 @@ namespace standard {
 
 		}
 
-		const auto make = [&](int W, int H, int a) {
+		const auto make = [&](int W, int H, int si, int a) {
 
 			const auto [ratio, ox, oy] { dspace::playfield(W, H) };
 
 			auto q{ tab };
+
+			q.tablet.speed = setups[si].second;
 
 			q.field.scale = ratio;
 			q.field.off = a ? oy : ox;
@@ -1539,21 +1611,27 @@ namespace standard {
 			return q;
 		};
 
-		std::vector<std::pair<size_t, std::array<int, 2>>> scored;
+		std::vector<std::pair<size_t, std::array<int, 3>>> scored;
 
-		for (int H{ 240 }; H <= 4320; ++H) {
+		for (int si{}; si < (int)setups.size(); ++si) {
 
-			const int W{ (int)std::lround(H * aspect) };
+			const double aspect{ setups[si].first };
 
-			if (std::abs(W - H * aspect) > 0.02)
-				continue;
+			for (int H{ 240 }; H <= 4320; ++H) {
 
-			size_t esc{};
+				const int W{ (int)std::lround(H * aspect) };
 
-			for (int a{}; a < 2; ++a)
-				esc += dspace::encode_axis(make(W, H, a), tv[a], tdt[a], state.exact_text, tb[a]).escapes.size();
+				if (std::abs(W - H * aspect) > 0.02)
+					continue;
 
-			scored.push_back({ esc, { W, H } });
+				size_t esc{};
+
+				for (int a{}; a < 2; ++a)
+					esc += dspace::encode_axis(make(W, H, si, a), tv[a], tdt[a], state.exact_text, tb[a]).escapes.size();
+
+				scored.push_back({ esc, { W, H, si } });
+
+			}
 
 		}
 
@@ -1566,7 +1644,7 @@ namespace standard {
 
 		for (size_t i{}; i < std::min<size_t>(scored.size(), 4); ++i) {
 
-			const auto [W, H] { scored[i].second };
+			const auto [W, H, si] { scored[i].second };
 
 			dspace::axis_params q[2];
 			dspace::axis_streams st[2];
@@ -1574,7 +1652,7 @@ namespace standard {
 
 			for (int a{}; a < 2; ++a) {
 
-				q[a] = make(W, H, a);
+				q[a] = make(W, H, si, a);
 				st[a] = dspace::encode_axis(q[a], vals[a], dt, state.exact_text);
 
 				if (st[a].escapes.size() * 2 > vals[a].size())
