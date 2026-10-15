@@ -392,12 +392,13 @@ namespace frames {
 	struct _move_features {
 		int mode, order, bkp, sign, scale, regime, first_res, prev_res, dt, since_move, gap;
 		int accel, vel_gap; // signed_length of the last change of this axis's move, and of the last move scaled to dt less the prediction
+		int prev2; // signed_length of the residual before prev_res
 	};
 
 	// what the move features remember per axis
 	struct _axis_history {
 
-		i64 scale16{ 64 }, prev_res{}; // scale16: running mean of |residual| * 16
+		i64 scale16{ 64 }, prev_res{}, prev_res2{}; // scale16: running mean of |residual| * 16
 		int since_move{}, gap{};
 
 		FORCEINLINE void fill(_move_features& f, int dt) const {
@@ -405,6 +406,7 @@ namespace frames {
 			f.scale = std::min(31, bit_length(scale16 >> 2));
 			f.regime = dt <= 3 ? 0 : dt <= 11 ? 1 : 2;
 			f.prev_res = (int)std::clamp<i64>(prev_res, -20, 20);
+			f.prev2 = signed_length(prev_res2);
 			f.dt = dt;
 			f.since_move = std::min(since_move, 15);
 			f.gap = std::min(gap, 15);
@@ -414,6 +416,7 @@ namespace frames {
 		FORCEINLINE void push(i64 res, i64 d) {
 
 			scale16 += ((std::min<i64>(res < 0 ? -res : res, 1 << 24) << 4) - scale16) >> 2;
+			prev_res2 = prev_res;
 			prev_res = res;
 
 			if (d != 0) {
@@ -438,7 +441,7 @@ namespace frames {
 			((((u64)f.accel * 33 + f.vel_gap) * 2 + f.order) * 3 + f.regime) * 32 + f.bkp,
 			(((u64)f.scale * 20 + std::min(f.first_res, 19)) * 2 + f.order) * 3 + f.regime,
 			((u64)std::min(f.dt, 40) * 32 + f.bkp) * 2 + f.order,
-			(((u64)f.since_move * 16 + f.gap) * 8 + std::min(f.bkp, 7)) * 3 + f.regime,
+			(((u64)signed_length(f.prev_res) * 33 + f.prev2) * 3 + f.regime) * 2 + f.order,
 			((u64)f.since_move * 16 + f.gap) * 41 + (u64)(f.prev_res + 20),
 		};
 

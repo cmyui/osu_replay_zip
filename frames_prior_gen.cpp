@@ -43,7 +43,7 @@ int main(int argc, char** argv) {
 
 		orz_state state{};
 
-		osr_to_orz(path.c_str(), "", ORZ_FLAG::has_osr_header, state);
+		osr_to_orz(path.c_str(), "", path.ends_with(".osr") ? (u32)ORZ_FLAG::has_osr_header : 0u, state);
 
 		_decoded_orz decoded;
 
@@ -54,13 +54,15 @@ int main(int argc, char** argv) {
 		dspace::_model_info info{};
 		u32 grid{};
 		std::span<const u8> rest;
+		bool start{}, start_time{};
 
-		if (!standard::read_head(decoded.streams[orz_tag::frames], side.table, grid, info, side.ap, rest))
+		if (!standard::read_head(decoded.streams[orz_tag::frames], side.table, grid, info, side.ap, start, start_time, rest))
 			continue;
 
 		side.axis = info.axis;
 		side.grid = frame_time::_time_grid{ grid };
 		side.relax = (decoded.flags & ORZ_FLAG::relax) != 0;
+		side.start_time = start_time;
 
 		if (!frames::uses_priors(side))
 			continue;
