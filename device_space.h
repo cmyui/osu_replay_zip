@@ -235,11 +235,14 @@ namespace dspace {
 		return a;
 	}
 
-	// window pixels -> playfield the game's way (GameField.DisplayToField: (pos - offset) * (1 / ratio) in float)
 	inline float to_field(const axis_params& p, float pos) {
 
-		const float inv{ 1.f / p.field.scale };
 		const float d{ pos - p.field.off };
+				
+		if (p.mode == axis_mode::mouse || (p.mode == axis_mode::absolute && p.tablet.fp == float_unit::x87))
+			return (float)((double)d * (1.0 / (double)p.field.scale));
+
+		const float inv{ 1.f / p.field.scale };
 
 		return d * inv;
 	}
