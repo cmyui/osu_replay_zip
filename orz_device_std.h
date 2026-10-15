@@ -680,27 +680,28 @@ namespace standard {
 		
 		if (refine) {
 
-			steps.clear();
-
 			std::vector<double> d;
 
 			for (size_t i{ 1 }; i < p.size(); ++i)
 				if (const double v{ std::abs((double)p[i] - p[i - 1]) }; v > 0.5 * s && v < 300.)
 					d.push_back(v);
 
-			if (d.size() < 100)
-				return none;
+			int k{};
 
-			const auto at{ d.begin() + d.size() / 10 };
+			if (d.size() >= 100) {
 
-			std::nth_element(d.begin(), at, d.end());
+				const auto at{ d.begin() + d.size() / 10 };
 
-			const int k{ (int)(*at / s + 0.5) };
+				std::nth_element(d.begin(), at, d.end());
 
-			if (k < 4 || k > 1000)
-				return none;
+				k = (int)(*at / s + 0.5);
+
+			}
 
 			for (const int j : { 1, -1 }) {
+
+				if (k < 4 || k > 1000)
+					break;
 
 				constexpr double TAU{ 6.283185307179586 };
 
@@ -813,7 +814,7 @@ namespace standard {
 
 				const double sens{ s * ratio };
 
-				if (sens < 0.05 || sens > 10.0 || !near_grid(sens, 0.01, 0.03))
+				if (sens < 0.05 || sens > 10.0 || (!refine && !near_grid(sens, 0.01, 0.03)))
 					continue;
 
 				dspace::axis_params q{};
@@ -824,7 +825,15 @@ namespace standard {
 				q.mouse.poll = 1000.f;
 				q.field.off = axis ? oy : ox;
 
-				add(q);
+				if (near_grid(sens, 0.01, 0.03))
+					add(q);
+
+				if (refine) {
+
+					q.mouse.sens = (float)sens;
+					add(q);
+
+				}
 
 			}
 
@@ -945,7 +954,7 @@ namespace standard {
 
 					const double speed{ units / win };
 
-					if (speed > 0.05 && speed < 10. && near_grid(speed, 0.01, 0.01) && near_grid(pos_c - win / 2., q, 0.05)) {
+					if (speed > 0.05 && speed < 10. && (refine || near_grid(speed, 0.01, 0.01)) && near_grid(pos_c - win / 2., q, 0.05)) {
 
 						auto a{ t };
 
@@ -953,7 +962,15 @@ namespace standard {
 						a.tablet.span = (float)win;
 						a.tablet.speed = (float)(std::round(speed * 100.0) / 100.0);
 
-						abs.push_back(a);
+						if (near_grid(speed, 0.01, 0.01))
+							abs.push_back(a);
+
+						if (refine) {
+
+							a.tablet.speed = (float)speed;
+							abs.push_back(a);
+
+						}
 
 					}
 
@@ -964,38 +981,51 @@ namespace standard {
 
 					const double speed{ units / span };
 
-					if (speed < 0.05 || speed > 10.0 || !near_grid(speed, 0.01, 0.01))
+					if (speed < 0.05 || speed > 10.0 || (!refine && !near_grid(speed, 0.01, 0.01)))
 						continue;
 
-					const float sp{ (float)(std::round(speed * 100.) / 100.) };
+					float sps[2];
+					int nsp{};
 
-					// origin = (screen x - client x)
-					// pos = (L * span / 65536 + origin - half) * speed + half
-					const double base{ (pos_c - t.tablet.half) / sp + t.tablet.half };
-					const double step{ (double)span / 65536. };
+					if (near_grid(speed, 0.01, 0.01))
+						sps[nsp++] = (float)(std::round(speed * 100.) / 100.);
+					
+					if (refine)
+						sps[nsp++] = (float)speed;
 
-					std::vector<int> origins;
+					for (int si{}; si < nsp; ++si) {
 
-					for (int o{}; origins.size() < 4 && o <= 4000; ++o) {
+						const float sp{ sps[si] };
 
-						if (near_grid(base - o, step, 0.03))
-							origins.push_back(o);
+						// origin = (screen x - client x)
+						// pos = (L * span / 65536 + origin - half) * speed + half
+						const double base{ (pos_c - t.tablet.half) / sp + t.tablet.half };
+						const double step{ (double)span / 65536. };
 
-						if (o && origins.size() < 4 && near_grid(base + o, step, 0.03))
-							origins.push_back(-o);
+						std::vector<int> origins;
 
-					}
+						for (int o{}; origins.size() < 4 && o <= 4000; ++o) {
 
-					for (const int o : origins) {
+							if (near_grid(base - o, step, 0.03))
+								origins.push_back(o);
 
-						auto a{ t };
+							if (o && origins.size() < 4 && near_grid(base + o, step, 0.03))
+								origins.push_back(-o);
 
-						a.tablet.mapping = dspace::tablet_mapping::desktop;
-						a.tablet.span = (float)span;
-						a.tablet.speed = sp;
-						a.tablet.origin = (float)o;
+						}
 
-						abs.push_back(a);
+						for (const int o : origins) {
+
+							auto a{ t };
+
+							a.tablet.mapping = dspace::tablet_mapping::desktop;
+							a.tablet.span = (float)span;
+							a.tablet.speed = sp;
+							a.tablet.origin = (float)o;
+
+							abs.push_back(a);
+
+						}
 
 					}
 
@@ -1341,6 +1371,77 @@ namespace standard {
 				chosen_cost = cost;
 				chosen = q;
 				best_streams = std::move(st);
+
+			}
+
+		}
+
+		if (refine && chosen_cost != SIZE_MAX && (chosen.mode == dspace::axis_mode::mouse || chosen.mode == dspace::axis_mode::absolute)) {
+
+			const auto setting = [](dspace::axis_params& q) -> float& {
+				return q.mode == dspace::axis_mode::mouse ? q.mouse.sens : q.tablet.speed;
+			};
+
+			auto base{ chosen };
+			const float v0{ setting(base) };
+
+			if (!same_bits(dspace::from_hundredths(dspace::hundredths(v0)), v0)) {
+
+				constexpr size_t N{ 2000 };
+
+				double best{ prefix_score(state, chosen, vals, dt, bounds, N) };
+				i64 best_j{};
+
+				const auto at = [&](i64 j) {
+
+					auto q{ base };
+
+					setting(q) = std::bit_cast<float>((u32)((i64)std::bit_cast<u32>(v0) + j));
+
+					return q;
+				};
+
+				for (const int stride : { 64, 8, 1 }) {
+
+					const i64 from{ best_j };
+
+					for (int k{ -8 }; k <= 8; ++k) {
+
+						if (k == 0)
+							continue;
+
+						const auto q{ at(from + k * stride) };
+
+						if (const double sc{ prefix_score(state, q, vals, dt, bounds, N, best) }; sc < best) {
+
+							best = sc;
+							best_j = from + k * stride;
+
+						}
+
+					}
+
+				}
+
+				if (best_j != 0) {
+
+					const auto q{ at(best_j) };
+
+					auto st{ dspace::encode_axis(q, vals, dt, state.exact_text, bounds) };
+
+					if (st.escapes.size() * 2 <= vals.size()) {
+
+						if (const size_t cost{ axis_cost(st, dt, axis, state.exact_text) }; cost < chosen_cost) {
+
+							chosen_cost = cost;
+							chosen = q;
+							best_streams = std::move(st);
+
+						}
+
+					}
+
+				}
 
 			}
 

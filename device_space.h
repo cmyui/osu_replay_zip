@@ -1025,6 +1025,27 @@ namespace dspace {
 	inline u32 hundredths(float v) { return (u32)std::lround((double)v * 100.0); }
 	inline float from_hundredths(u32 v) { return (float)((double)v / 100.0); }
 
+	inline void write_setting(float v, bit_stream& o) {
+
+		const bool grid{ v > 0.f && v < 1e6f && same_bits(from_hundredths(hundredths(v)), v) };
+
+		o.push_back(!grid);
+
+		if (grid)
+			write_u(hundredths(v), o);
+		else
+			write_float(v, o);
+
+	}
+
+	inline float read_setting(const _bit_view in, size_t& i) {
+
+		if (!in[i++])
+			return from_hundredths(read_u(in, i));
+
+		return read_float(in, i);
+	}
+
 	inline void write_params(const axis_params& p, bit_stream& o) {
 
 		write_bucket((u32)p.mode, o, 2);
@@ -1039,7 +1060,7 @@ namespace dspace {
 
 		if (p.mode == axis_mode::mouse) {
 
-			write_u(hundredths(p.mouse.sens), o);
+			write_setting(p.mouse.sens, o);
 			write_u((u32)p.mouse.poll, o);
 			o.push_back(p.field.wide);
 			write_float(p.field.scale, o);
@@ -1056,7 +1077,7 @@ namespace dspace {
 			write_u((u32)p.tablet.span, o);
 			write_u((u32)rc::zz((int)p.tablet.origin), o);
 			write_u((u32)p.tablet.half, o);
-			write_u(hundredths(p.tablet.speed), o);
+			write_setting(p.tablet.speed, o);
 			write_float(p.field.scale, o);
 			write_float(p.field.off, o);
 
@@ -1080,7 +1101,7 @@ namespace dspace {
 
 		if (p.mode == axis_mode::mouse) {
 
-			p.mouse.sens = from_hundredths(read_u(in, i));
+			p.mouse.sens = read_setting(in, i);
 			p.mouse.poll = (float)read_u(in, i);
 			p.field.wide = in[i++] != 0;
 			p.field.scale = read_float(in, i);
@@ -1096,7 +1117,7 @@ namespace dspace {
 			p.tablet.span = (float)read_u(in, i);
 			p.tablet.origin = (float)rc::unzz(read_u(in, i));
 			p.tablet.half = (float)read_u(in, i);
-			p.tablet.speed = from_hundredths(read_u(in, i));
+			p.tablet.speed = read_setting(in, i);
 			p.field.scale = read_float(in, i);
 			p.field.off = read_float(in, i);
 
