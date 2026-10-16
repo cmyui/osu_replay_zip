@@ -112,6 +112,14 @@ namespace dspace {
 		bool operator==(const axis_params&) const = default;
 	};
 
+	// common window sizes
+	constexpr int PM_RES[][2]{
+		{ 1920, 1080 }, { 2560, 1440 }, { 1366, 768 }, { 1360, 768 }, { 1600, 900 }, { 1280, 720 },
+		{ 1680, 1050 }, { 1920, 1200 }, { 1440, 900 }, { 1280, 800 }, { 1280, 1024 }, { 1024, 768 },
+		{ 800, 600 }, { 3840, 2160 }, { 2560, 1080 }, { 3440, 1440 }, { 1536, 864 }, { 1280, 960 },
+		{ 1400, 1050 }, { 1600, 1200 }, { 2560, 1600 }, { 1152, 864 }, { 1600, 1024 }, { 1920, 1440 },
+	};
+
 	FORCEINLINE auto playfield(int W, int H) {
 
 		struct _playfield {
@@ -1050,7 +1058,70 @@ namespace dspace {
 		return read_float(in, i);
 	}
 
-	inline void write_params(const axis_params& p, bit_stream& o) {
+	constexpr int WINDOW_BITS{ 5 };
+
+	static_assert(std::size(PM_RES) <= (1u << WINDOW_BITS));
+
+	inline int window_of(const field_map& f, int axis) {
+
+		for (int r{}; r < (int)std::size(PM_RES); ++r) {
+
+			const auto [ratio, ox, oy] { playfield(PM_RES[r][0], PM_RES[r][1]) };
+
+			if (same_bits(ratio, f.scale) && same_bits(axis ? oy : ox, f.off))
+				return r;
+
+		}
+
+		return -1;
+	}
+
+	inline void write_field(const field_map& f, int axis, bit_stream& o) {
+
+		const int r{ window_of(f, axis) };
+
+		o.push_back(r >= 0);
+
+		if (r < 0) {
+
+			write_float(f.scale, o);
+			write_float(f.off, o);
+
+			return;
+		}
+
+		for (int b{}; b < WINDOW_BITS; ++b)
+			o.push_back((r >> b) & 1);
+
+	}
+
+	inline bool read_field(const _bit_view in, size_t& i, int axis, field_map& f) {
+
+		if (!in[i++]) {
+
+			f.scale = read_float(in, i);
+			f.off = read_float(in, i);
+
+			return true;
+		}
+
+		int r{};
+
+		for (int b{}; b < WINDOW_BITS; ++b)
+			r |= (int)in[i++] << b;
+
+		if (r >= (int)std::size(PM_RES))
+			return false;
+
+		const auto [ratio, ox, oy] { playfield(PM_RES[r][0], PM_RES[r][1]) };
+
+		f.scale = ratio;
+		f.off = axis ? oy : ox;
+
+		return true;
+	}
+
+	inline void write_params(const axis_params& p, int axis, bit_stream& o) {
 
 		write_bucket((u32)p.mode, o, 2);
 
@@ -1067,8 +1138,7 @@ namespace dspace {
 			write_setting(p.mouse.sens, o);
 			write_u((u32)p.mouse.poll, o);
 			o.push_back(p.field.wide);
-			write_float(p.field.scale, o);
-			write_float(p.field.off, o);
+			write_field(p.field, axis, o);
 
 		}
 
@@ -1082,14 +1152,13 @@ namespace dspace {
 			write_u((u32)rc::zz((int)p.tablet.origin), o);
 			write_u((u32)p.tablet.half, o);
 			write_setting(p.tablet.speed, o);
-			write_float(p.field.scale, o);
-			write_float(p.field.off, o);
+			write_field(p.field, axis, o);
 
 		}
 
 	}
 
-	inline axis_params read_params(const _bit_view in, size_t& i) {
+	inline axis_params read_params(const _bit_view in, size_t& i, int axis, bool& ok) {
 
 		axis_params p{};
 
@@ -1108,8 +1177,7 @@ namespace dspace {
 			p.mouse.sens = read_setting(in, i);
 			p.mouse.poll = (float)read_u(in, i);
 			p.field.wide = in[i++] != 0;
-			p.field.scale = read_float(in, i);
-			p.field.off = read_float(in, i);
+			ok &= read_field(in, i, axis, p.field);
 
 		}
 
@@ -1122,19 +1190,53 @@ namespace dspace {
 			p.tablet.origin = (float)rc::unzz(read_u(in, i));
 			p.tablet.half = (float)read_u(in, i);
 			p.tablet.speed = read_setting(in, i);
-			p.field.scale = read_float(in, i);
-			p.field.off = read_float(in, i);
+			ok &= read_field(in, i, axis, p.field);
 
 		}
 
 		return p;
 	}
 
+	inline bool y_from_x(const axis_params& x, axis_params& y) {
+
+		y = x;
+
+		if (x.mode == axis_mode::rational)
+			return true;
+
+		if (x.mode != axis_mode::mouse)
+			return false;
+
+		const int r{ window_of(x.field, 0) };
+
+		if (r < 0)
+			return false;
+
+		y.field.off = playfield(PM_RES[r][0], PM_RES[r][1]).off_y;
+
+		return true;
+	}
+
 	inline void write_info(const _model_info& m, bit_stream& o) {
 
-		for (const auto& ax : m.axis) {
+		for (int a{}; a < 2; ++a) {
+
+			const auto& ax{ m.axis[a] };
 
 			write_u((u32)ax.seg.size(), o);
+
+			if (a == 1 && ax.seg.size() == 1 && m.axis[0].seg.size() == 1) {
+
+				axis_params y;
+
+				const bool same{ y_from_x(m.axis[0].seg[0].p, y) && y == ax.seg[0].p };
+
+				o.push_back(same);
+
+				if (same)
+					continue;
+
+			}
 
 			u32 prev{};
 
@@ -1148,7 +1250,7 @@ namespace dspace {
 					writing_segment = true;
 
 				prev = sg.start;
-				write_params(sg.p, o);
+				write_params(sg.p, a, o);
 
 			}
 
@@ -1161,7 +1263,9 @@ namespace dspace {
 
 		_model_info m{};
 
-		for (auto& ax : m.axis) {
+		for (int a{}; a < 2; ++a) {
+
+			auto& ax{ m.axis[a] };
 
 			const u32 n{ read_u(in, i) };
 
@@ -1169,6 +1273,14 @@ namespace dspace {
 				return false;
 
 			ax.seg.resize(n);
+
+			if (a == 1 && n == 1 && m.axis[0].seg.size() == 1 && in[i++]) {
+
+				if (!y_from_x(m.axis[0].seg[0].p, ax.seg[0].p))
+					return false;
+
+				continue;
+			}
 
 			u32 prev{};
 
@@ -1186,9 +1298,11 @@ namespace dspace {
 
 				}
 
-				sg.p = read_params(in, i);
+				bool ok{ true };
 
-				if (sg.p.mode > axis_mode::text ||
+				sg.p = read_params(in, i, a, ok);
+
+				if (!ok || sg.p.mode > axis_mode::text ||
 					(sg.p.mode == axis_mode::mouse && !(sg.p.mouse.poll >= 0.f && sg.p.mouse.poll <= 8000.f)))
 						return false; // no detector produces these
 			}

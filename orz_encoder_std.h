@@ -948,6 +948,47 @@ namespace standard {
 			if (px.mode != dspace::axis_mode::none || py.mode != dspace::axis_mode::none)
 				refine_window(state, vals, dt, px, py, ws);
 
+			// mouase axis are differing, try each other and keep the winners
+			if (px.mode == dspace::axis_mode::mouse && py.mode == dspace::axis_mode::mouse &&
+				(px.field.scale != py.field.scale || px.field.wide != py.field.wide || px.mouse.sens != py.mouse.sens || px.mouse.poll != py.mouse.poll)) {
+
+				const dspace::axis_params from[2]{ py, px };
+				dspace::axis_params* to[2]{ &px, &py };
+
+				for (int a{}; a < 2; ++a) {
+
+					size_t best{ axis_cost(ws[a], dt, a, state.exact_text) };
+
+					for (const auto& [W, H] : PM_RES) {
+
+						const auto [ratio, ox, oy] { dspace::playfield(W, H) };
+
+						if (ratio != from[a].field.scale)
+							continue;
+
+						auto q{ from[a] };
+
+						q.field.off = a ? oy : ox;
+
+						auto st{ dspace::encode_axis(q, vals[a], dt, state.exact_text) };
+
+						if (st.escapes.size() * 2 > vals[a].size())
+							continue;
+
+						if (const size_t c{ axis_cost(st, dt, a, state.exact_text) }; c < best) {
+
+							best = c;
+							*to[a] = q;
+							ws[a] = std::move(st);
+
+						}
+
+					}
+
+				}
+
+			}
+
 			whole.axis[0] = dspace::axis_model{ px };
 			whole.axis[1] = dspace::axis_model{ py };
 

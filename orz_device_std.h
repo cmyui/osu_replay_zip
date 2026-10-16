@@ -427,13 +427,7 @@ namespace standard {
 		return bits;
 	}
 
-	// common window sizes, tried for reversing the playfield transform
-	constexpr int PM_RES[][2]{
-		{ 1920, 1080 }, { 2560, 1440 }, { 1366, 768 }, { 1360, 768 }, { 1600, 900 }, { 1280, 720 },
-		{ 1680, 1050 }, { 1920, 1200 }, { 1440, 900 }, { 1280, 800 }, { 1280, 1024 }, { 1024, 768 },
-		{ 800, 600 }, { 3840, 2160 }, { 2560, 1080 }, { 3440, 1440 }, { 1536, 864 }, { 1280, 960 },
-		{ 1400, 1050 }, { 1600, 1200 }, { 2560, 1600 }, { 1152, 864 }, { 1600, 1024 }, { 1920, 1440 },
-	};
+	using dspace::PM_RES;
 
 	struct prefix_result {
 		double score;
