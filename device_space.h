@@ -1120,6 +1120,44 @@ namespace dspace {
 
 		return true;
 	}
+	
+	constexpr u32 POLL_RATES[]{ 125, 250, 500, 1000, 2000, 4000, 8000 };
+	
+	inline void write_poll(float poll, bit_stream& o) {
+
+		u32 k{};
+
+		while (k < std::size(POLL_RATES) && (float)POLL_RATES[k] != poll)
+			++k;
+
+		for (int b{}; b < 3; ++b)
+			o.push_back((k >> b) & 1);
+
+		if (k == std::size(POLL_RATES))
+			for (int b{}; b < 16; ++b)
+				o.push_back(((u32)poll >> b) & 1);
+
+	}
+
+	inline float read_poll(const _bit_view in, size_t& i) {
+
+		u32 k{};
+
+		for (int b{}; b < 3; ++b)
+			k |= (u32)in[i++] << b;
+
+		if (k < std::size(POLL_RATES))
+			return (float)POLL_RATES[k];
+
+		u32 v{};
+
+		for (int b{}; b < 16; ++b)
+			v |= (u32)in[i++] << b;
+
+		return (float)v;
+	}
+
+	static_assert(std::size(POLL_RATES) == 7);
 
 	inline void write_params(const axis_params& p, int axis, bit_stream& o) {
 
@@ -1136,7 +1174,7 @@ namespace dspace {
 		if (p.mode == axis_mode::mouse) {
 
 			write_setting(p.mouse.sens, o);
-			write_u((u32)p.mouse.poll, o);
+			write_poll(p.mouse.poll, o);
 			o.push_back(p.field.wide);
 			write_field(p.field, axis, o);
 
@@ -1175,7 +1213,7 @@ namespace dspace {
 		if (p.mode == axis_mode::mouse) {
 
 			p.mouse.sens = read_setting(in, i);
-			p.mouse.poll = (float)read_u(in, i);
+			p.mouse.poll = read_poll(in, i);
 			p.field.wide = in[i++] != 0;
 			ok &= read_field(in, i, axis, p.field);
 
