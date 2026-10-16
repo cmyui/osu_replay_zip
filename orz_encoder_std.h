@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <climits>
 #include <array>
+#include <unordered_map>
 #include <vector>
 
 namespace standard {
@@ -107,7 +108,520 @@ namespace standard {
 		return sh;
 	}
 
-	
+	struct _native_grid {
+		bool on;
+		u64 A; // 32:32 fixed p
+		i64 C; // 32:32 fixed p
+	};
+
+	inline i64 grid_value(const _native_grid& g, i64 j) {
+
+		return (i64)((u64)g.A * (u64)j + (u64)g.C) >> 32;
+	}
+
+	inline bool grid_index(const _native_grid& g, i64 L, i64& j) {
+
+		const i64 num{ (L << 32) - g.C };
+
+		j = num >= 0 ? (i64)(((u64)num + g.A - 1) / g.A) : -(i64)((u64)(-num) / g.A);
+
+		return grid_value(g, j) == L;
+	}
+
+	inline _native_grid fit_grid(const std::vector<i64>& K) {
+
+		std::vector<i64> d{ K };
+
+		std::sort(d.begin(), d.end());
+		d.erase(std::unique(d.begin(), d.end()), d.end());
+
+		// a few escapes can widen the range well past 65535
+		if (d.size() < 64 || d.front() <= -(1 << 24) || d.back() >= (1 << 24))
+			return {};
+
+		std::unordered_map<i64, int> gaps;
+
+		for (size_t i{ 1 }; i < d.size(); ++i)
+			++gaps[d[i] - d[i - 1]];
+
+		std::vector<std::pair<int, i64>> common;
+
+		for (const auto& [k, n] : gaps)
+			common.push_back({ n, k });
+
+		std::sort(common.begin(), common.end(), std::greater<>{});
+		common.resize(std::min<size_t>(common.size(), 6));
+
+		const auto covered = [&](double st) {
+
+			i64 n{};
+
+			for (const auto& [k, c] : gaps) {
+
+				const double m{ std::round((double)k / st) };
+
+				if (m >= 1 && std::abs((double)k - m * st) <= 0.5 + 0.01 * (double)k)
+					n += c;
+
+			}
+
+			return n;
+		};
+
+		std::vector<std::pair<double, i64>> cand;
+		std::vector<double> pairs;
+
+		for (const auto& [n1, g1] : common) {
+
+			const int lo_n{ gaps.count(g1 - 1) ? gaps[g1 - 1] : 0 }, hi_n{ gaps.count(g1 + 1) ? gaps[g1 + 1] : 0 };
+			const i64 g2{ lo_n >= hi_n ? g1 - 1 : g1 + 1 };
+			const int n2{ std::max(lo_n, hi_n) };
+			const double pair{ (double)(g1 * n1 + g2 * n2) / (n1 + n2) };
+
+			pairs.push_back(pair);
+
+			for (int k{ 1 }; k <= 4; ++k)
+				if (pair / k >= 1.5)
+					cand.push_back({ pair / k, covered(pair / k) });
+
+		}
+
+		i64 most{};
+
+		for (const auto& c : cand)
+			most = std::max(most, c.second);
+
+		double s{};
+
+		for (const auto& [st, n] : cand)
+			if (n * 10 >= most * 9)
+				s = std::max(s, st);
+
+		if (s < 1.5 || most * 2 < (i64)d.size() - 1)
+			return {};
+
+		const double guess{ s }, span{ (double)(d.back() - d.front()) };
+		
+		const auto sample = [&](size_t n) {
+
+			std::vector<double> u;
+
+			for (size_t i{}, stride{ std::max<size_t>(1, d.size() / n) }; i < d.size(); i += stride)
+				u.push_back((double)(d[i] - d.front()) / span);
+
+			return u;
+		};
+
+		const std::vector<double> few{ sample(1024) }, many{ sample(4096) };
+
+		double phase{};
+
+		const auto sweep = [&](double reach_steps, double q_step, const std::vector<double>& u) {
+
+			constexpr int BINS{ 256 };
+
+			const double n0{ span / s };
+			const int reach{ (int)(reach_steps / q_step) };
+
+			int hist[BINS], best{ -1 };
+			double best_s{ s };
+
+			for (int q{ -reach }; q <= reach; ++q) {
+
+				const double N{ n0 + q * q_step }, st{ span / N };
+
+				// a wide reach can pass zero steps
+				if (N <= 0 || st < 1.2)
+					continue;
+
+				std::fill(std::begin(hist), std::end(hist), 0);
+
+				for (const double x : u) {
+
+					const double f{ x * N };
+
+					++hist[std::min(BINS - 1, (int)((f - std::floor(f)) * BINS))];
+
+				}
+
+				const int w{ std::max(1, (int)(BINS / st)) };
+
+				int sum{};
+
+				for (int b{}; b < w; ++b)
+					sum += hist[b];
+
+				for (int b{}; b < BINS; ++b) {
+
+					if (sum > best) {
+
+						best = sum;
+						best_s = st;
+						phase = (b + w * 0.5) / BINS * st;
+
+					}
+
+					sum += hist[(b + w) % BINS] - hist[b];
+
+				}
+
+			}
+
+			s = best_s;
+		};
+
+		std::vector<i64> on, j;
+
+		std::vector<size_t> up, dn;
+
+		const auto hulls = [&]() {
+
+			const auto cross = [&](size_t o, size_t a, size_t b) {
+
+				return (j[a] - j[o]) * (on[b] - on[o]) - (on[a] - on[o]) * (j[b] - j[o]);
+			};
+
+			up.clear();
+			dn.clear();
+
+			for (size_t i{}; i < on.size(); ++i) {
+
+				while (up.size() >= 2 && cross(up[up.size() - 2], up.back(), i) >= 0)
+					up.pop_back();
+
+				up.push_back(i);
+
+				while (dn.size() >= 2 && cross(dn[dn.size() - 2], dn.back(), i) <= 0)
+					dn.pop_back();
+
+				dn.push_back(i);
+
+			}
+
+		};
+
+		const auto window = [&](double st, double& lo) {
+
+			double hi{ std::numeric_limits<double>::max() };
+
+			lo = std::numeric_limits<double>::lowest();
+
+			for (size_t i : up)
+				lo = std::max(lo, (double)on[i] - (double)j[i] * st);
+
+			for (size_t i : dn)
+				hi = std::min(hi, (double)on[i] + 1. - (double)j[i] * st);
+
+			return hi - lo;
+		};
+
+		const auto refine = [&](bool exact) {
+
+			for (int it{}; it < 3; ++it) {
+
+				std::vector<std::pair<double, size_t>> t(d.size());
+				std::vector<i64> jd(d.size());
+
+				for (size_t i{}; i < d.size(); ++i) {
+
+					jd[i] = std::llround(((double)(d[i] - d.front()) - phase) / s);
+					t[i] = { (double)(d[i] - d.front()) - (double)jd[i] * s, i };
+
+				}
+
+				size_t count{ d.size() }, at{};
+
+				if (!exact) {
+
+					std::sort(t.begin(), t.end());
+
+					count = 0;
+
+					for (size_t e{}, b{}; e < t.size(); ++e) {
+
+						while (t[e].first - t[b].first >= 1.)
+							++b;
+
+						if (e - b + 1 > count) {
+
+							count = e - b + 1;
+							at = b;
+
+						}
+
+					}
+
+					std::sort(t.begin() + at, t.begin() + at + count, [](const auto& x, const auto& y) { return x.second < y.second; });
+
+				}
+
+				on.clear();
+				j.clear();
+
+				const i64 low{ jd[t[at].second] };
+
+				for (size_t k{ at }; k < at + count; ++k) {
+
+					on.push_back(d[t[k].second]);
+					j.push_back(jd[t[k].second] - low);
+
+				}
+
+				hulls();
+
+				double a{ s * 0.999 }, b{ s * 1.001 }, lo;
+
+				for (int k{}; k < 40; ++k) {
+
+					const double m1{ a + (b - a) / 3 }, m2{ b - (b - a) / 3 };
+
+					if (window(m1, lo) < window(m2, lo))
+						a = m1;
+					else
+						b = m2;
+
+				}
+
+				s = (a + b) / 2;
+
+				// clearly no exact grid near this step
+				if (exact && window(s, lo) < -1.)
+					break;
+
+			}
+
+			double lo;
+
+			return window(s, lo) > 0 ? on.size() : 0;
+		};
+
+		double lo;
+
+		const auto fit_from = [&](double st) -> size_t {
+
+			s = st;
+			phase = 0;
+
+			for (int it{}; it < 20; ++it) {
+
+				i64 n{};
+
+				for (size_t i{ 1 }; i < d.size(); ++i)
+					n += std::max<i64>(1, std::llround((double)(d[i] - d[i - 1]) / s));
+
+				const double s1{ span / (double)n };
+
+				if (s1 == s)
+					break;
+
+				s = s1;
+
+			}
+
+			if (const size_t n{ refine(true) }; n != 0)
+				return n;
+
+			// a span step far from st is some other step
+			if (std::abs(st - s) > s * 0.1)
+				return 0;
+
+			sweep(span / s * std::max(0.01, std::abs(st - s) / s + 0.005), 1., few);
+			sweep(1., 0.25, many);
+
+			size_t count{ refine(false) };
+
+			if (count == 0)
+				return 0;
+
+			const double s0{ s }, p0{ phase };
+
+			sweep(std::min(span / s * 0.0025, 8.), 0.125, many);
+
+			if (const size_t c{ refine(false) }; c > count && window(s, lo) > 0)
+				count = c;
+			else {
+
+				s = s0;
+				phase = p0;
+				refine(false);
+
+			}
+
+			return count;
+		};
+
+		// estimated bits saved per value
+		const auto gain = [&](size_t n) {
+
+			const double f{ (double)n / (double)d.size() };
+			
+			return n * 10 < d.size() * 7 ? std::numeric_limits<double>::lowest() : f * std::log2(s) - (1. - f) * 3.;
+		};
+
+		if (const size_t count{ fit_from(guess) }; count * 10 < d.size() * 9) {
+
+			double best{ gain(count) }, best_s{ s }, best_phase{ phase };
+			std::vector<double> tried{ guess };
+
+			for (const double pr : pairs)
+				for (int k{ 1 }; k <= 6; ++k) {
+
+					const double st{ pr / k };
+
+					if (st < 1.2 || std::any_of(tried.begin(), tried.end(), [&](double t) { return std::abs(st - t) < t * 0.005; }))
+						continue;
+
+					tried.push_back(st);
+
+					if (const double g{ gain(fit_from(st)) }; g > best) {
+
+						best = g;
+						best_s = s;
+						best_phase = phase;
+
+					}
+
+				}
+
+			if (best == std::numeric_limits<double>::lowest())
+				return {};
+
+			s = best_s;
+			phase = best_phase;
+
+			if (refine(true) == 0)
+				refine(false);
+
+		}
+
+		const double w{ window(s, lo) };
+		const u64 A{ (u64)std::llround(s * 4294967296.) };
+
+		if (w <= 0 || A == 0)
+			return {};
+
+		return { true, A, (i64)std::floor((lo + w / 2) * 4294967296.) };
+	}
+
+	inline dspace::axis_streams grid_streams(const dspace::axis_params& p, const dspace::axis_streams& st, std::span<const float> vals,
+		bool exact_text, const _native_grid& g) {
+
+		dspace::axis_streams o{};
+
+		o.K.resize(st.K.size());
+		o.slack = st.slack;
+		o.decoded.resize(st.K.size());
+
+		bool held{};
+		float last{};
+		i64 prev{};
+
+		for (size_t i{}; i < st.K.size(); ++i) {
+
+			const i64 L{ st.K[i] };
+
+			i64 j;
+
+			// the grid value below may be nearer
+			if (!grid_index(g, L, j) && j > 0 && L - grid_value(g, j - 1) < grid_value(g, j) - L)
+				--j;
+
+			j = std::max<i64>(j, 0);
+			o.K[i] = j;
+
+			const i64 Ls{ grid_value(g, j) };
+			const i64 dk{ Ls - prev };
+
+			prev = Ls;
+
+			const dotnet::text_bounds b{ vals[i], exact_text };
+
+			if (held && dk == 0) {
+
+				if (b.contains(last)) {
+
+					o.decoded[i] = last;
+
+					continue;
+				}
+
+			} else if (const float v{ dspace::absolute_field(p, Ls) }; b.contains(v)) {
+
+				held = false;
+				last = v;
+				o.decoded[i] = v;
+
+				continue;
+			}
+
+			// mostly one native count off the grid value
+			float x{ vals[i] };
+
+			for (const i64 n : { Ls - 1, Ls + 1 })
+				if (const float v{ dspace::absolute_field(p, n) }; b.contains(v)) {
+
+					x = v;
+
+					break;
+				}
+
+			o.escapes.push_back({ (u32)i, x });
+			o.escape_pred.push_back(dspace::absolute_field(p, Ls));
+
+			held = true;
+			last = x;
+			o.decoded[i] = x;
+
+		}
+
+		return o;
+	}
+
+	// the values one native count either side of grid value L
+	inline void grid_near(const dspace::axis_params& p, i64 L, float (&near)[2]) {
+
+		near[0] = dspace::absolute_field(p, L - 1);
+		near[1] = dspace::absolute_field(p, L + 1);
+
+	}
+
+	// after the autopilot parameters in the head of the frames stream, per axis
+	inline void write_grid(const _native_grid& g, bit_stream& o) {
+
+		o.push_back(g.on);
+
+		if (!g.on)
+			return;
+
+		for (int b{}; b < 48; ++b)
+			o.push_back((g.A >> b) & 1);
+
+		for (int b{}; b < 64; ++b)
+			o.push_back(((u64)g.C >> b) & 1);
+
+	}
+
+	inline bool read_grid(const _bit_view in, size_t& i, _native_grid& g) {
+
+		g = {};
+		g.on = small_read<1>(in, i) != 0;
+
+		if (!g.on)
+			return true;
+
+		u64 c{};
+
+		for (int b{}; b < 48 && i < in.max_size(); ++b)
+			g.A |= (u64)(in[i++] != 0) << b;
+
+		for (int b{}; b < 64 && i < in.max_size(); ++b)
+			c |= (u64)(in[i++] != 0) << b;
+
+		g.C = (i64)c;
+
+		return g.A != 0;
+	}
+
 	// autopilot parameters, after the device model in the head of the frames stream
 	inline void write_autopilot(const autopilot::_params& ap, bit_stream& o) {
 
@@ -237,42 +751,94 @@ namespace standard {
 			p.st[a] = dspace::encode_axis_model(m.axis[a], vals[a], dt, state.exact_text);
 
 		// frames: delta table and device model, from the next byte the context mixed frames and escape values
-		bit_stream head{};
+		bit_stream model_head{};
 
-		frame_time::write_table(head, shared.table, shared.grid);
-		dspace::write_info(m, head);
-		write_autopilot(ap, head);
+		frame_time::write_table(model_head, shared.table, shared.grid);
+		dspace::write_info(m, model_head);
+		write_autopilot(ap, model_head);
 
-		head.push_back(shared.start);
+		_native_grid grid[2]{};
+		dspace::axis_streams on_grid[2];
 
-		if (shared.start)
-			head.push_back(shared.start_time);
+		for (int a{}; a < 2; ++a)
+			if (m.axis[a].seg.size() == 1 && m.axis[a].seg[0].p.mode == dspace::axis_mode::absolute) {
 
-		frames::_frame_data fd{ shared.delta, shared.keys, shared.repeated };
+				grid[a] = fit_grid(p.st[a].K);
 
-		fd.moves = moves;
-
-		std::vector<std::pair<float, float>> values[2];
-
-		for (int a{}; a < 2; ++a) {
-
-			fd.K[a] = p.st[a].K;
-			fd.slack[a] = p.st[a].slack;
-
-			for (size_t j{}; j < p.st[a].escapes.size(); ++j) {
-
-				fd.escaped[a].push_back(p.st[a].escapes[j].first);
-				values[a].push_back({ p.st[a].escapes[j].second, p.st[a].escape_pred[j] });
+				if (grid[a].on)
+					on_grid[a] = grid_streams(m.axis[a].seg[0].p, p.st[a], vals[a], state.exact_text, grid[a]);
 
 			}
 
-		}
+		const auto build = [&](bool use_grid) {
 
-		const frames::_side side{ m.axis, shared.table, frame_time::_time_grid{ shared.grid }, shared.relax, ap, shared.start_time };
+			bit_stream head{ model_head };
 
-		add_to_u8(head.data, frames::encode(fd, side, shared.delta.size(), values, state.exact_text));
+			for (int a{}; a < 2; ++a)
+				write_grid(use_grid ? grid[a] : _native_grid{}, head);
 
-		p.streams.add_stream(orz_tag::frames, head.data.data(), head.data.size());
+			head.push_back(shared.start);
+
+			if (shared.start)
+				head.push_back(shared.start_time);
+
+			frames::_frame_data fd{ shared.delta, shared.keys, shared.repeated };
+
+			fd.moves = moves;
+
+			std::vector<frames::_escape> values[2];
+
+			for (int a{}; a < 2; ++a) {
+
+				const bool on{ use_grid && grid[a].on };
+				const dspace::axis_streams& st{ on ? on_grid[a] : p.st[a] };
+
+				fd.K[a] = st.K;
+				fd.slack[a] = st.slack;
+
+				for (size_t j{}; j < st.escapes.size(); ++j) {
+
+					const u32 i{ st.escapes[j].first };
+
+					fd.escaped[a].push_back(i);
+					values[a].push_back({ st.escapes[j].second, st.escape_pred[j] });
+
+					if (on)
+						grid_near(m.axis[a].seg[0].p, grid_value(grid[a], st.K[i]), values[a].back().near);
+
+				}
+
+			}
+
+			const frames::_side side{ m.axis, shared.table, frame_time::_time_grid{ shared.grid }, shared.relax, ap, shared.start_time };
+
+			add_to_u8(head.data, frames::encode(fd, side, shared.delta.size(), values, state.exact_text));
+
+			return head.data;
+		};
+
+		bool use_grid{ grid[0].on || grid[1].on };
+
+		for (int a{}; a < 2; ++a)
+			use_grid &= !grid[a].on || on_grid[a].escapes.size() * 20 < on_grid[a].K.size();
+
+		auto best{ build(use_grid) };
+
+		if (!use_grid && (grid[0].on || grid[1].on))
+			if (auto g{ build(true) }; g.size() < best.size()) {
+
+				best = std::move(g);
+				use_grid = true;
+
+			}
+
+		
+		if (use_grid)
+			for (int a{}; a < 2; ++a)
+				if (grid[a].on)
+					p.st[a].decoded = on_grid[a].decoded;
+
+		p.streams.add_stream(orz_tag::frames, best.data(), best.size());
 
 		return p;
 	}
@@ -548,9 +1114,9 @@ namespace standard {
 
 	}
 	
-	// the head of the frames stream: delta table, time grid and device model; rest: what follows from the next byte
+	// the head of the frames stream: delta table, time grid, device model, autopilot and tablet grids; rest: what follows from the next byte
 	inline bool read_head(std::span<const u8> data, std::vector<int>& table, u32& grid, dspace::_model_info& info,
-		autopilot::_params& ap, bool& start, bool& start_time, std::span<const u8>& rest) {
+		autopilot::_params& ap, _native_grid (&grid_of)[2], bool& start, bool& start_time, std::span<const u8>& rest) {
 
 		const _bit_view head{ data };
 
@@ -560,6 +1126,10 @@ namespace standard {
 
 		if (!dspace::read_info(head, bit, info) || !read_autopilot(head, bit, ap))
 			return false;
+
+		for (int a{}; a < 2; ++a)
+			if (!read_grid(head, bit, grid_of[a]))
+				return false;
 
 		start = bit < head.max_size() && head[bit++];
 		start_time = start && bit < head.max_size() && head[bit++];
@@ -578,7 +1148,9 @@ namespace standard {
 
 		bool start{}, start_time{};
 
-		if (!read_head(stream_data[orz_tag::frames], side.table, grid, info, side.ap, start, start_time, rest))
+		_native_grid grid_of[2]{};
+
+		if (!read_head(stream_data[orz_tag::frames], side.table, grid, info, side.ap, grid_of, start, start_time, rest))
 			return R.empty();
 
 		side.axis = info.axis;
@@ -591,13 +1163,29 @@ namespace standard {
 
 		const auto sample{ repeat::sample_of(fd.repeated) };
 
+		// tablet grid indices back to values
+		for (int a{}; a < 2; ++a)
+			if (grid_of[a].on)
+				for (auto& k : fd.K[a])
+					k = grid_value(grid_of[a], k);
+
 		const bool exact_text{ (header->flags & ORZ_FLAG::text_shortest) != 0 };
 
 		std::vector<float> out;
 
 		for (int a{}; a < 2; ++a) {
 
-			const auto escape_value = [&](float pred) { return reader.escape(pred, a, exact_text); };
+			size_t n{};
+			
+			const auto escape_value = [&](float pred) {
+
+				frames::_escape v{ 0.f, pred };
+
+				if (grid_of[a].on)
+					grid_near(info.axis[a].seg[0].p, fd.K[a][fd.escaped[a][n++]], v.near);
+
+				return reader.escape(v, a, exact_text);
+			};
 
 			if (!dspace::decode_axis(info.axis[a], fd.K[a], fd.slack[a], fd.escaped[a], fd.dt, exact_text, out, escape_value))
 				return false;

@@ -42,6 +42,11 @@ namespace frames {
 		std::vector<autopilot::event> moves; // autopilot moves, by the new position they are coded at
 	};
 
+	struct _escape {
+		float x, pred;
+		float near[2]{ NAN, NAN };
+	};
+
 	struct _side {
 		const dspace::axis_model* axis{};
 		std::vector<int> table;          // the replay's delta table
@@ -581,7 +586,9 @@ namespace frames {
 	// an escaped position's value against decode_axis's prediction: the distance in 7 digit mantissas (in ulps for
 	// shortest round-trip text) when near, else the raw float. prev_len: per axis, the last distance's bit length.
 	template<typename Coder>
-	float escape_value(Coder& c, cm::model& m, float x, float pred, int a, bool exact_text, int& prev_len, bool encoding) {
+	float escape_value(Coder& c, cm::model& m, const _escape& e, int a, bool exact_text, int& prev_len, bool encoding) {
+
+		const float x{ e.x }, pred{ e.pred };
 
 		i64 diff{};
 
@@ -590,6 +597,19 @@ namespace frames {
 		const u64 ctx[2]{ kind, kind * 64 + (u64)prev_len };
 
 		m.bind(ctx);
+
+		if (!std::isnan(e.near[0])) {
+
+			const int k{ encoding ? (x == e.near[0] ? 1 : x == e.near[1] ? 2 : 0) : 0 };
+
+			if (m.code(c, k != 0, 40u, 0, 0)) {
+
+				prev_len = 34;
+
+				return e.near[m.code(c, k == 2, 41u, 0, 0)];
+			}
+
+		}
 
 		if (!std::isfinite(pred) || !m.code(c, near, 0u, 0, 0)) {
 
@@ -1026,9 +1046,9 @@ namespace frames {
 
 	}
 
-	// the frames, then each axis's escape values (x, decode_axis's prediction) in order
-	inline std::vector<u8> encode(_frame_data& fd, const _side& side, size_t frames,
-		const std::vector<std::pair<float, float>> (&values)[2], bool exact_text) {
+	// the frames, then each axis's escape values in order
+	inline std::vector<u8> encode(_frame_data& fd, const _side& side, size_t frames, const std::vector<_escape> (&values)[2],
+		bool exact_text) {
 
 		_models M{};
 
@@ -1043,8 +1063,8 @@ namespace frames {
 
 			int prev_len{};
 
-			for (const auto& [x, pred] : values[a])
-				escape_value(e, M.escape_value, x, pred, a, exact_text, prev_len, true);
+			for (const _escape& v : values[a])
+				escape_value(e, M.escape_value, v, a, exact_text, prev_len, true);
 
 		}
 
@@ -1067,8 +1087,8 @@ namespace frames {
 
 		}
 
-		float escape(float pred, int a, bool exact_text) {
-			return escape_value(d, M.escape_value, 0.f, pred, a, exact_text, prev_len[a], false);
+		float escape(const _escape& v, int a, bool exact_text) {
+			return escape_value(d, M.escape_value, v, a, exact_text, prev_len[a], false);
 		}
 
 	};

@@ -1245,7 +1245,7 @@ namespace dspace {
 			i64 p{ window(a, dt) };
 
 			if (n >= 3 && ms(dt) >= ACCEL_MS && ms(hist_dt[0]) >= ACCEL_MS && ms(hist_dt[1]) >= ACCEL_MS)
-				p += (hist[a][0] - hist[a][1]) * 3 / 8;
+				p += (hist[a][0] - hist[a][1]) / 4;
 
 			return p;
 		}

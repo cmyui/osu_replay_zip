@@ -54,9 +54,10 @@ int main(int argc, char** argv) {
 		dspace::_model_info info{};
 		u32 grid{};
 		std::span<const u8> rest;
+		standard::_native_grid grid_of[2]{};
 		bool start{}, start_time{};
 
-		if (!standard::read_head(decoded.streams[orz_tag::frames], side.table, grid, info, side.ap, start, start_time, rest))
+		if (!standard::read_head(decoded.streams[orz_tag::frames], side.table, grid, info, side.ap, grid_of, start, start_time, rest))
 			continue;
 
 		side.axis = info.axis;
