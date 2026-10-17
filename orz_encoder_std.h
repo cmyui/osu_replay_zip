@@ -212,7 +212,7 @@ namespace standard {
 			return u;
 		};
 
-		const std::vector<double> few{ sample(1024) }, many{ sample(4096) };
+		const std::vector<double> few{ sample(256) }, many{ sample(2048) };
 
 		double phase{};
 

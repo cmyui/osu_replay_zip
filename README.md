@@ -12,7 +12,7 @@ Sizes are totals over the whole set: the .osr replay data (LZMA) in, the .orz ou
 # osu!
 28.061% of the original size (4,162 replays)
 
-226,602,464 -> 63,587,442
+226,602,464 -> 63,587,927
 
 # taiko
 46.990% of the original size (456 replays)
@@ -32,4 +32,4 @@ Sizes are totals over the whole set: the .osr replay data (LZMA) in, the .orz ou
 # Total
 30.141% of the original size (6,552 replays)
 
-254,390,290 -> 76,675,136
+254,390,290 -> 76,675,621
