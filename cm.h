@@ -122,9 +122,8 @@ namespace cm {
 		u64 mask{};
 		u32 width{};
 
-		// optional full hash and use count per line, for exporting priors
+		// optional full hash per line, for exporting priors
 		std::vector<u64> keys;
-		std::vector<u32> uses;
 
 		void init(int bits, u32 width_, bool record_keys = false) {
 
@@ -132,12 +131,8 @@ namespace cm {
 			t.assign(size_t(width) << bits, counter{});
 			mask = (u64(1) << bits) - 1;
 
-			if (record_keys) {
-
+			if (record_keys)
 				keys.assign(size_t(1) << bits, 0);
-				uses.assign(size_t(1) << bits, 0);
-
-			}
 
 		}
 
@@ -145,12 +140,8 @@ namespace cm {
 
 			const size_t i{ (size_t)(h & mask) };
 
-			if (!keys.empty()) {
-
+			if (!keys.empty())
 				keys[i] = h;
-				++uses[i];
-
-			}
 
 			return &t[i * width];
 		}
@@ -275,7 +266,8 @@ namespace cm {
 		}
 	};
 
-	// no output: runs the models only (prior training)
+	// no output: runs the models only (prior training). A trainer with observe(table, counter index, bit) also sees
+	// every counter update.
 	struct bit_trainer {
 
 		FORCEINLINE int code(int y, int) {
@@ -338,6 +330,9 @@ namespace cm {
 			const int err{ ((y << 12) - p) * MIX_RATE };
 
 			for (int i{}; i < N; ++i) {
+
+				if constexpr (requires { c.observe(table, size_t{}, y); })
+					c.observe(table, (size_t)(k[i] - table.t.data()), y);
 
 				update(*k[i], y);
 				w[i] += (int)(((i64)x[i] * err + 0x8000) >> 16);

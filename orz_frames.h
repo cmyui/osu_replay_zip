@@ -62,7 +62,7 @@ namespace frames {
 
 		// in frames_prior.h order
 		std::array<cm::model*, FRAMES_PRIOR_MODELS> all() {
-			return { &keys_changed, &keys_bits, &keys_high, &time, &repeat, &move, &move_bits, &slack, &escape };
+			return { &keys_changed, &keys_bits, &keys_high, &time, &repeat, &move, &move_bits, &slack, &escape, &escape_value, &ap_event, &ap_value };
 		}
 
 		// tables follow the replay's length up to a cap (the frame count of a file to decode is untrusted),
@@ -90,9 +90,9 @@ namespace frames {
 			move_bits.init(2, std::clamp(b + 2, 12, 20 + extra), 1, 8 * 4, 8 * 32, record_keys);
 			slack.init(1, std::clamp(b - 2, 10, 16), 16, 64, 64, record_keys);
 			escape.init(5, std::clamp(b + 2, 12, 20 + extra), 1, 16 * 3, 16 * 3, record_keys);
-			escape_value.init(2, 10, 64, 1, 1);
-			ap_event.init(5, std::clamp(b, 10, 16), 1, 8, 8);
-			ap_value.init(2, 12, 64, 1, 1);
+			escape_value.init(2, 10 + extra, 64, 1, 1, record_keys);
+			ap_event.init(5, std::clamp(b, 10, 16 + extra), 1, 8, 8, record_keys);
+			ap_value.init(2, 12 + extra, 64, 1, 1, record_keys);
 
 		}
 
@@ -1006,44 +1006,83 @@ namespace frames {
 
 	}
 
-	// relax replays and those without a device model (autopilot) play differently enough that priors trained on the
-	// others only cost them, so they start flat
-	inline bool uses_priors(const _side& side) {
+	// frames_prior.h holds a prior per set: osu!standard by the device of the replay's model (rational, mouse,
+	// absolute), relax by the same, relax and osu!standard without a device model (mostly relax osu!catch and
+	// autopilot), then osu!taiko, osu!catch and osu!mania (modes::kind order)
+	enum prior_set : u32 {
+		set_rational, set_mouse, set_absolute, set_relax_rational, set_relax_mouse, set_relax_absolute, set_relax_other,
+		set_no_device, set_taiko
+	};
 
-		if (side.relax)
-			return false;
+	inline u32 prior_set(const _side& side) {
+
+		// the higher mode of the axes' first segments
+		auto device{ dspace::axis_mode::none };
 
 		for (int a{}; a < 2; ++a)
-			for (const auto& sg : side.axis[a].seg)
-				if (sg.p.mode != dspace::axis_mode::text)
-					return true;
+			if (!side.axis[a].seg.empty())
+				device = std::max(device, side.axis[a].seg[0].p.mode);
 
-		return false;
+		if (device < dspace::axis_mode::rational || device > dspace::axis_mode::absolute)
+			return side.relax ? set_relax_other : set_no_device;
+
+		return (side.relax ? set_relax_rational : set_rational) + (u32)device - (u32)dspace::axis_mode::rational;
 	}
 
-	// counters start from priors trained on real replays (frames_prior.h)
-	inline void seed_priors(_models& M, const _side& side) {
+	// a starting state: counters by context hash (p | confidence << 16 | slot << 24), then per model the mixer weights
+	// and apm table, which a model takes only when the sizes match
+	struct _prior {
+		const u32* start;
+		const u32* keys; // the low 32 bits, all a table's index takes
+		const u32* values;
+		const u32* weight_start;
+		const i32* weights;
+		const u32* apm_start;
+		const u16* apm;
+	};
 
-		if (!uses_priors(side))
-			return;
+	inline _prior builtin_prior(u32 set) {
+		return { FRAMES_PRIOR_START[set], FRAMES_PRIOR_KEYS, FRAMES_PRIOR_VALUES, FRAMES_PRIOR_WEIGHT_START[set],
+			FRAMES_PRIOR_WEIGHTS, FRAMES_PRIOR_APM_START[set], FRAMES_PRIOR_APM };
+	}
 
-		const auto models{ M.all() };
+	// models: in frames_prior.h order, nullptr where a mode has no such model
+	inline void seed(const std::array<cm::model*, FRAMES_PRIOR_MODELS>& models, const _prior& prior) {
 
 		for (u32 m{}; m < FRAMES_PRIOR_MODELS; ++m) {
 
-			for (u32 j{ FRAMES_PRIOR_START[m] }; j < FRAMES_PRIOR_START[m + 1]; ++j) {
+			cm::model* md{ models[m] };
 
-				const u32 value{ FRAMES_PRIOR_VALUES[j] };
+			if (!md || md->table.t.empty())
+				continue;
 
-				auto& k{ models[m]->table.line(FRAMES_PRIOR_KEYS[j])[value >> 24] };
+			for (u32 j{ prior.start[m] }; j < prior.start[m + 1]; ++j) {
+
+				const u32 value{ prior.values[j] };
+
+				auto& k{ md->table.line(prior.keys[j])[value >> 24] };
 
 				k.p = (u16)(value & 0xFFFF);
-				k.n = (u16)std::min<u32>((value >> 16) & 0xFF, FRAMES_PRIOR_CONFIDENCE);
+				k.n = (u16)((value >> 16) & 0xFF);
 
 			}
 
+			const u32 w0{ prior.weight_start[m] }, w1{ prior.weight_start[m + 1] };
+
+			if (md->weights.size() == w1 - w0)
+				std::copy(prior.weights + w0, prior.weights + w1, md->weights.begin());
+
+			const u32 a0{ prior.apm_start[m] }, a1{ prior.apm_start[m + 1] };
+
+			if (md->refine.t.size() == a1 - a0)
+				std::copy(prior.apm + a0, prior.apm + a1, md->refine.t.begin());
+
 		}
 
+	}
+
+	inline void seed_priors(_models& M, const _side& side) {
+		seed(M.all(), builtin_prior(prior_set(side)));
 	}
 
 	// the frames, then each axis's escape values in order
