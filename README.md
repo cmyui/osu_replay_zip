@@ -1,6 +1,6 @@
 # ORZ format
 
-.orz is a lossless compression format to store osu replay frames.
+.orz is a lossless compression format to store osu replay frames. [SPEC_OUTLINE.md](SPEC_OUTLINE.md) outlines the format.
 
 The format is still maturing, please do NOT use this format just yet!
 There can and will be breaking changes as the initial V0 is tuned on a dataset thats over a terabyte graciously provided by cmyui (akatsuki private server)
