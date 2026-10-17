@@ -36,7 +36,11 @@ only has to print the same 7 significant digits.
   `v` below its leading 1. `bucket()` with no widths is that final form alone.
 - **`small<N>(v)`**: `N` bits if `v < 2^N − 1`. Otherwise `N` one bits, then `floor(log2 v) − (N − 1)` further
   one bits, a zero, and the `floor(log2 v)` bits of `v` below its leading 1.
-- **zigzag**: `zz(v) = 2v` for `v ≥ 0`, `−2v − 1` for `v < 0`.
+- **zigzag** maps signed to unsigned:
+
+  ```math
+  \operatorname{zz}(v) = \begin{cases} 2v & v \ge 0 \\ -2v - 1 & v < 0 \end{cases}
+  ```
 - **ULEB128**: the usual 7-bits-per-byte length used by `.osr` strings.
 - **Coded values** inside the arithmetic-coded body (§5) are binary decisions. "Raw" bits there are coded at
   probability 1/2. `gamma(v)` there is Elias gamma: `floor(log2 v)` as unary decisions, then the bits below the
@@ -151,12 +155,19 @@ Every frames stream is a short bit-field head, then one arithmetic-coded body. T
 decisions, each predicted by context mixing. Encoder and decoder must compute identical predictions, so all model
 arithmetic is integer-only and normative.
 
+In the formulas below, $`\lfloor x / 2^k \rfloor`$ is an arithmetic right shift by `k`: it rounds toward −∞ for
+negative values too.
+
 ### 5.1 Arithmetic coder
 
 The state is two `u32` values, `x1 = 0` and `x2 = 0xFFFFFFFF`. To code a bit `y` with probability `p` (`P(y=1)`
 scaled to 16 bits):
 
-- `xmid = x1 + ((x2 − x1) · p >> 16)`, in 64-bit arithmetic;
+- split the range, in 64-bit arithmetic:
+
+  ```math
+  x_\text{mid} = x_1 + \left\lfloor \frac{(x_2 - x_1)\, p}{2^{16}} \right\rfloor
+  ```
 - `y = 1` keeps the low part (`x2 = xmid`), `y = 0` the high part (`x1 = xmid + 1`);
 - while the top bytes of `x1` and `x2` are equal, output that byte and shift: `x1 <<= 8`, `x2 = (x2 << 8) | 255`.
 
@@ -168,7 +179,12 @@ decodes `y = (x ≤ xmid)`. It shifts input in the same way, reading 0 for any b
 A counter holds a 16-bit probability `p` (starting at 32768) and a count `n` (starting at 0, at most 255). After a bit
 `y`:
 
-- `p += ((y ? 65535 : 0) − p) · RATE[n] >> 16`, where `RATE[n] = 131072 / (2n + 3)`;
+- move `p` toward the bit, by a rate that falls as `n` grows:
+
+  ```math
+  p \leftarrow p + \left\lfloor \frac{(65535\,y - p)\cdot \mathrm{RATE}[n]}{2^{16}} \right\rfloor,
+  \qquad \mathrm{RATE}[n] = \left\lfloor \frac{131072}{2n + 3} \right\rfloor
+  ```
 - then `n` increases by 1 if it is below 255.
 
 ### 5.3 Models
@@ -191,11 +207,17 @@ h ^= h >> 29;  h *= 0xBF58476D1CE4E5B9;  h ^= h >> 32
 
 ### 5.4 Mixing and the coded probability
 
-`squash` maps a stretched value `d` to a 12-bit probability:
+`squash` maps a stretched value `d` to a 12-bit probability by interpolating a 33-entry table `T`. With
+$`i = \lfloor d / 128 \rfloor + 16`$ and $`r = d - 128 \lfloor d / 128 \rfloor`$:
 
-- `squash(d) = 4095` for `d > 2047`, and `1` for `d < −2047`;
-- otherwise it interpolates between table entries:
-  `T[(d >> 7) + 16] · (128 − (d & 127)) + T[(d >> 7) + 17] · (d & 127) + 64 >> 7`.
+```math
+\operatorname{squash}(d) =
+\begin{cases}
+1 & d < -2047 \\
+4095 & d > 2047 \\
+\left\lfloor \dfrac{T[i]\,(128 - r) + T[i+1]\,r + 64}{128} \right\rfloor & \text{otherwise}
+\end{cases}
+```
 
 The table is:
 
@@ -206,21 +228,43 @@ T = {1, 2, 3, 6, 10, 16, 27, 45, 73, 120, 194, 310, 488, 747, 1101, 1546, 2047, 
 
 `stretch(p)` is the smallest `d` in −2047…2047 with `squash(d) ≥ p` (2047 if none).
 
-For one decision with weight set `w` and APM context `a`:
+For one decision with counters $`p_i`$ (one per input), weight set $`w`$ and APM table $`A`$ at context `a`:
 
-1. `x_i = stretch(counter_i.p >> 4)`, and `dot = Σ x_i · w_i` (64-bit);
-2. mixer output: `pm = squash(clamp(dot >> 16, −2047, 2047))`;
-3. APM output: let `s = stretch(pm) + 2048`, `lo = a · 33 + (s >> 7)` and `t = s & 127`, then
-   `pa = APM[lo] · (128 − t) + APM[lo + 1] · t >> 7`;
-4. coded probability: `p = clamp((pm · 16 + 3 · pa) >> 2, 32, 65504)`.
+1. **Mix** the stretched counters (`dot` in 64-bit):
+
+   ```math
+   x_i = \operatorname{stretch}\!\left(\left\lfloor \frac{p_i}{16} \right\rfloor\right), \qquad
+   p_m = \operatorname{squash}\!\left(\operatorname{clamp}\!\left(\left\lfloor \frac{\sum_i x_i w_i}{2^{16}} \right\rfloor,\ -2047,\ 2047\right)\right)
+   ```
+2. **Refine** with the APM, interpolating between two of its entries:
+
+   ```math
+   s = \operatorname{stretch}(p_m) + 2048, \quad
+   j = 33a + \left\lfloor \frac{s}{128} \right\rfloor, \quad
+   t = s \bmod 128, \qquad
+   p_a = \left\lfloor \frac{A[j]\,(128 - t) + A[j+1]\,t}{128} \right\rfloor
+   ```
+3. **Code** the bit with a quarter of the mixer and three quarters of the APM:
+
+   ```math
+   p = \operatorname{clamp}\!\left(\left\lfloor \frac{16\,p_m + 3\,p_a}{4} \right\rfloor,\ 32,\ 65504\right)
+   ```
 
 After coding `y`, in this order:
 
-1. for each input: update its counter (§5.2), then `w_i += (x_i · ((y << 12) − pm) · 40 + 0x8000) >> 16`;
-2. move both APM entries toward `y ? 65535 : 0`: `APM[lo] += ((target − APM[lo]) · (128 − t) >> 7) · 5 >> 8` and
-   `APM[lo + 1] += ((target − APM[lo + 1]) · t >> 7) · 5 >> 8`.
+1. for each input, update its counter (§5.2), then its weight:
 
-APM entries start at `squash((j − 16) · 128) · 16` for `j` = 0…32.
+   ```math
+   w_i \leftarrow w_i + \left\lfloor \frac{40\, x_i\, (4096\,y - p_m) + 2^{15}}{2^{16}} \right\rfloor
+   ```
+2. move both APM entries toward the bit, scaled to 16 bits as `τ = 65535 · y`:
+
+   ```math
+   A[j] \leftarrow A[j] + \left\lfloor \frac{5 \left\lfloor (\tau - A[j])\,(128 - t) / 128 \right\rfloor}{256} \right\rfloor, \qquad
+   A[j+1] \leftarrow A[j+1] + \left\lfloor \frac{5 \left\lfloor (\tau - A[j+1])\, t / 128 \right\rfloor}{256} \right\rfloor
+   ```
+
+APM entries start at $`A[33c + k] = 16 \cdot \operatorname{squash}(128\,(k - 16))`$ for $`k = 0 \ldots 32`$.
 
 ### 5.5 Table sizes
 
@@ -293,9 +337,14 @@ change.
 2. **Time grid**: 3 bits choosing a period from `{50/3, 25, 25/2, 100/3, 20, none}` ms. It is only used as context.
 3. **Device model** for x, then for y: §6.3.
 4. **Autopilot**: 1 bit. If set, the game speed (`small<2>`: 1.0, 1.5 or 0.75) and the screen width and height (§6.6).
-5. **Native grid** for x, then y: 1 bit. If set, a 48-bit step and a 64-bit offset in 32.32 fixed point, with
-   `value(j) = (step · j + offset) >> 32`. It maps the coded integers of a single rational or absolute segment onto
-   the device's own lattice.
+5. **Native grid** for x, then y: 1 bit. If set, a 48-bit step and a 64-bit offset in 32.32 fixed point, with the sum
+   wrapping as a signed 64-bit integer:
+
+   ```math
+   \operatorname{value}(j) = \left\lfloor \frac{\text{step} \cdot j + \text{offset}}{2^{32}} \right\rfloor
+   ```
+
+   It maps the coded integers of a single rational or absolute segment onto the device's own lattice.
 6. **start**: 1 bit; if set, **start_time**: 1 bit.
    - `start`: frames 0 and 1 are at (256, −500), the position every replay starts at.
    - `start_time`: their deltas are also 0 and −1, and are not coded.
@@ -337,7 +386,7 @@ The models turn the coded integer `K` of each new position into a float:
 
 | Mode | Value |
 |---|---|
-| rational | `(a · K + b) / D`, in double, rounded to float |
+| rational | $`(a K + b) / D`$, in double, rounded to float |
 | mouse | window pixels move by `counts · sensitivity` per input report, then map to the playfield |
 | absolute | a tablet coordinate `L = K` in 0…65535 maps to the window, then to the playfield |
 | text | `K` is the float's place in the order of printable values (§4) |
@@ -346,7 +395,11 @@ The models turn the coded integer `K` of each new position into a float:
 
 **mouse**: a sensitivity, a polling rate (125–8000 Hz) and the window.
 
-- The step `ΔK` is split into `round(dt · poll / 1000)` reports, at least 1 and at most `|ΔK|`.
+- The step `ΔK` is split into `m` reports over the frame's `dt` ms:
+
+  ```math
+  m = \operatorname{clamp}\!\left(\operatorname{round}\!\left(\frac{dt \cdot \text{poll}}{1000}\right),\ 1,\ \min(|\Delta K|,\ 2^{16})\right)
+  ```
 - The pixel position is advanced in double and rounded to float after each report, and clamped to the window.
 - Report splits and float rounding can leave several candidate floats. A slack index chooses one: first the
   neighbouring report counts, then values a few ulps away.
@@ -357,13 +410,17 @@ whether the game computed in SSE single precision or x87 extended precision.
 
 **The window** is either one of 24 common sizes, by index, or an explicit scale and offset.
 
-**Window to playfield**: `field = (pixel − offset) / scale`, computed the way osu!stable does. The rounding of each
-step, and an "unrounded subtraction" variant, are part of the model.
+**Window to playfield**: $`\text{field} = (\text{pixel} - \text{offset}) / \text{scale}`$, computed the way
+osu!stable does. The rounding of each step, and an "unrounded subtraction" variant, are part of the model.
 
 **text**:
 
-- with 7-digit text, `K = ±((e + 50) · 9 000 000 + (m − 1 000 000) + 1)` for 7 significant digits `m` and exponent
-  `e`, with 0 at `K = 0`;
+- with 7-digit text, a nonzero value with 7 significant digits `m` (1 000 000 to 9 999 999) and exponent `e` is at
+  the place below, signed as the value, and 0 is at `K = 0`:
+
+  ```math
+  K = \pm\big((e + 50) \cdot 9\,000\,000 + (m - 10^6) + 1\big)
+  ```
 - with shortest text, `K` is ± the float's bit pattern.
 
 Rational, absolute and mouse axes **hold** after an escape: until the next move, frames keep the escaped value.
