@@ -943,6 +943,50 @@ namespace standard {
 
 						}
 
+						const double product{ (double)other->tablet.span * other->tablet.speed };
+						const double units{ s * ratio * 65536. };
+
+						for (int h{ 5 }; h <= 1000 && s > 0.; ++h) {
+
+							const float sp{ (float)(h / 100.) };
+							const double other_span{ product / sp };
+
+							if (std::abs(other_span - std::round(other_span)) > 1e-3)
+								continue;
+
+							const double span_d{ units / sp };
+							const int span{ (int)std::lround(span_d) };
+
+							if (span < 100 || std::abs(span_d - span) > 0.25)
+								continue;
+
+							auto r{ q };
+
+							r.tablet.span = (float)span;
+							r.tablet.speed = sp;
+
+							const double pos_c{ c * ratio + q.field.off };
+							const double base{ (pos_c - q.tablet.half) / sp + q.tablet.half };
+							const double step{ (double)span / 65536. };
+
+							int found{};
+
+							for (int k{}; found < 4 && k <= 8000; ++k) {
+
+								const int o{ k & 1 ? -(k + 1) / 2 : k / 2 };
+
+								if (near_grid(base - o, step, 0.03)) {
+
+									r.tablet.origin = (float)o;
+									abs.push_back(r);
+									++found;
+
+								}
+
+							}
+
+						}
+
 					}
 
 				}
@@ -1316,6 +1360,16 @@ namespace standard {
 				}
 
 				cands.push_back(best);
+
+				// SSE and x87 often tie on the sampled frame so let the whole replay decide
+				if (best.mode == dspace::axis_mode::absolute) {
+
+					auto flip{ best };
+
+					flip.tablet.fp = best.tablet.fp == dspace::float_unit::sse ? dspace::float_unit::x87 : dspace::float_unit::sse;
+					cands.push_back(flip);
+
+				}
 
 			}
 
