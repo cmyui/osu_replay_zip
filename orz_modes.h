@@ -69,20 +69,29 @@ namespace modes {
 		frames::_models keys_time;
 		cm::model moved, dir, res, res_bits;
 
-		void init(size_t frames, kind mode) {
+		void init(size_t frames, kind mode, bool record_keys = false) {
 
-			keys_time.init_keys_time(frames);
+			keys_time.init_keys_time(frames, record_keys);
 
 			if (mode != fruits)
 				return;
 
-			const int b{ (int)std::bit_width(frames) };
+			const int b{ (int)std::bit_width(frames) }, extra{ record_keys ? 4 : 0 };
 
-			moved.init(6, std::clamp(b + 3, 12, 20), 1, 64, 64);
-			dir.init(4, std::clamp(b + 1, 10, 18), 1, 16, 16);
-			res.init(5, std::clamp(b, 10, 18), RES_STEPS, RES_STEPS, RES_STEPS);
-			res_bits.init(2, std::clamp(b + 1, 10, 18), 1, 8, 8);
+			moved.init(6, std::clamp(b + 3, 12, 20 + extra), 1, 64, 64, record_keys);
+			dir.init(4, std::clamp(b + 1, 10, 18 + extra), 1, 16, 16, record_keys);
+			res.init(5, std::clamp(b, 10, 18 + extra), RES_STEPS, RES_STEPS, RES_STEPS, record_keys);
+			res_bits.init(2, std::clamp(b + 1, 10, 18 + extra), 1, 8, 8, record_keys);
 
+		}
+
+		// in frames_prior.h order
+		std::array<cm::model*, FRAMES_PRIOR_MODELS> all() {
+			return { &keys_time.keys_changed, &keys_time.keys_bits, &keys_time.keys_high, &keys_time.time, &moved, &dir, &res, &res_bits };
+		}
+
+		void seed(kind mode) {
+			frames::seed(all(), frames::builtin_prior(frames::set_taiko + mode));
 		}
 
 	};
@@ -483,6 +492,47 @@ namespace modes {
 
 	}
 
+	// what the frames are coded against: the delta table and time grid, which frames are escaped and osu!mania's
+	// scroll speeds
+	struct _prepared {
+		_side side;
+		u32 grid{};
+		std::vector<u8> escaped;
+		std::vector<std::pair<u32, float>> speeds;
+	};
+
+	inline _prepared prepare(const _osr& R, kind mode, bool exact_text) {
+
+		_prepared p{ { mode } };
+
+		p.escaped.resize(R.size());
+
+		for (size_t f{}; f < R.size(); ++f)
+			p.escaped[f] = escaped(mode, R[f], exact_text);
+
+		const auto delta{ frame_time::deltas(R) };
+
+		p.grid = frame_time::pick_grid(delta);
+		p.side.table = frame_time::build_table(delta);
+		p.side.grid = frame_time::_time_grid{ p.grid };
+		p.side.exact_text = exact_text;
+
+		if (mode == mania) {
+
+			u32 columns{};
+
+			for (size_t f{}; f < R.size(); ++f)
+				if (!p.escaped[f])
+					columns |= (u32)R[f].x;
+
+			p.side.bits = std::max(1, (int)std::bit_width(columns));
+			p.speeds = speed_changes(R, p.escaped);
+
+		}
+
+		return p;
+	}
+
 	// osu!taiko, osu!catch or osu!mania, as the flags say
 	void encode(const char* output_file, const _osr& r, const u32 flags, orz_state& state) {
 
@@ -499,40 +549,17 @@ namespace modes {
 
 		_osr R{ r };
 
-		std::vector<u8> esc(R.size());
-
-		for (size_t f{}; f < R.size(); ++f)
-			esc[f] = escaped(mode, R[f], state.exact_text);
-
-		const auto delta{ frame_time::deltas(R) };
-		const u32 grid{ frame_time::pick_grid(delta) };
-
-		_side side{ mode, frame_time::build_table(delta), frame_time::_time_grid{ grid } };
-
-		side.exact_text = state.exact_text;
-
-		if (mode == mania) {
-
-			u32 columns{};
-
-			for (size_t f{}; f < R.size(); ++f)
-				if (!esc[f])
-					columns |= (u32)R[f].x;
-
-			side.bits = std::max(1, (int)std::bit_width(columns));
-
-		}
+		auto [side, grid, esc, speeds]{ prepare(R, mode, state.exact_text) };
 
 		// frames: delta table and time grid, from the next byte the context mixed frames
 		bit_stream head{};
 
 		frame_time::write_table(head, side.table, grid);
 
-		auto speeds{ mode == mania ? speed_changes(R, esc) : std::vector<std::pair<u32, float>>{} };
-
 		_models M{};
 
 		M.init(R.size(), mode);
+		M.seed(mode);
 
 		cm::bit_encoder e{};
 
@@ -595,6 +622,7 @@ namespace modes {
 		_models M{};
 
 		M.init(R.size(), side.mode);
+		M.seed(side.mode);
 
 		frame_loop(d, M, R, esc, speeds, side, false);
 
