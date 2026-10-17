@@ -427,6 +427,19 @@ namespace standard {
 		return bits;
 	}
 
+	// axis_cost for comparing devices: fully coded, cursor replays come out smaller on tablets and larger on mice than the
+	// estimate says (not relax osu!catch)
+	static size_t device_cost(const orz_state& state, const dspace::axis_params& p, const dspace::axis_streams& a, std::span<const int> dt,
+		int axis) {
+
+		const size_t bits{ axis_cost(a, dt, axis, state.exact_text) };
+
+		if (state.catcher)
+			return bits;
+
+		return p.mode == dspace::axis_mode::absolute ? bits * 15 / 16 : p.mode == dspace::axis_mode::mouse ? bits * 17 / 16 : bits;
+	}
+
 	using dspace::PM_RES;
 
 	struct prefix_result {
@@ -1431,7 +1444,7 @@ namespace standard {
 			if (st.escapes.size() * 2 > vals.size())
 				return;
 
-			if (const size_t cost{ axis_cost(st, dt, axis, state.exact_text) }; cost < chosen_cost) {
+			if (const size_t cost{ device_cost(state, q, st, dt, axis) }; cost < chosen_cost) {
 
 				chosen_cost = cost;
 				chosen = q;
@@ -1507,7 +1520,7 @@ namespace standard {
 
 			if (const auto r{ detect_axis_model(state, vals, dt, axis, other, rs, false, true, s, c) }; r.mode != dspace::axis_mode::none) {
 
-				if (const size_t cost{ axis_cost(rs, dt, axis, state.exact_text) }; cost < chosen_cost) {
+				if (const size_t cost{ device_cost(state, r, rs, dt, axis) }; cost < chosen_cost) {
 
 					chosen = r;
 					best_streams = std::move(rs);
@@ -1688,7 +1701,7 @@ namespace standard {
 		size_t best_cost{};
 
 		for (int a{}; a < 2; ++a)
-			best_cost += axis_cost(ws[a], dt, a, state.exact_text);
+			best_cost += device_cost(state, *pa[a], ws[a], dt, a);
 
 		for (size_t i{}; i < std::min<size_t>(scored.size(), 4); ++i) {
 
@@ -1707,7 +1720,7 @@ namespace standard {
 					cost = SIZE_MAX;
 
 				if (cost != SIZE_MAX)
-					cost += axis_cost(st[a], dt, a, state.exact_text);
+					cost += device_cost(state, q[a], st[a], dt, a);
 
 			}
 
@@ -1772,8 +1785,8 @@ namespace standard {
 
 				const auto cost = [&](const dspace::axis_params& q, size_t a, size_t b) {
 
-					return axis_cost(dspace::encode_axis(q, vals.subspan(a, b - a), dt.subspan(a, b - a), state.exact_text),
-						dt.subspan(a, b - a), axis, state.exact_text);
+					return device_cost(state, q, dspace::encode_axis(q, vals.subspan(a, b - a), dt.subspan(a, b - a), state.exact_text),
+						dt.subspan(a, b - a), axis);
 				};
 
 				for (size_t k{ m.seg.size() }; k-- > 0 && m.seg[k].p != p;) {
