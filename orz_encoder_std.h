@@ -503,6 +503,10 @@ namespace standard {
 		return { true, A, (i64)std::floor((lo + w / 2) * 4294967296.) };
 	}
 
+	inline float grid_field(const dspace::axis_params& p, i64 L) {
+		return p.mode == dspace::axis_mode::rational ? dspace::rational_value(p, L) : dspace::absolute_field(p, L);
+	}
+
 	inline dspace::axis_streams grid_streams(const dspace::axis_params& p, const dspace::axis_streams& st, std::span<const float> vals,
 		bool exact_text, const _native_grid& g) {
 
@@ -545,7 +549,7 @@ namespace standard {
 					continue;
 				}
 
-			} else if (const float v{ dspace::absolute_field(p, Ls) }; b.contains(v)) {
+			} else if (const float v{ grid_field(p, Ls) }; b.contains(v)) {
 
 				held = false;
 				last = v;
@@ -558,7 +562,7 @@ namespace standard {
 			float x{ vals[i] };
 
 			for (const i64 n : { Ls - 1, Ls + 1 })
-				if (const float v{ dspace::absolute_field(p, n) }; b.contains(v)) {
+				if (const float v{ grid_field(p, n) }; b.contains(v)) {
 
 					x = v;
 
@@ -566,7 +570,7 @@ namespace standard {
 				}
 
 			o.escapes.push_back({ (u32)i, x });
-			o.escape_pred.push_back(dspace::absolute_field(p, Ls));
+			o.escape_pred.push_back(grid_field(p, Ls));
 
 			held = true;
 			last = x;
@@ -580,8 +584,8 @@ namespace standard {
 	// the values one native count either side of grid value L
 	inline void grid_near(const dspace::axis_params& p, i64 L, float (&near)[2]) {
 
-		near[0] = dspace::absolute_field(p, L - 1);
-		near[1] = dspace::absolute_field(p, L + 1);
+		near[0] = grid_field(p, L - 1);
+		near[1] = grid_field(p, L + 1);
 
 	}
 
@@ -761,7 +765,8 @@ namespace standard {
 		dspace::axis_streams on_grid[2];
 
 		for (int a{}; a < 2; ++a)
-			if (m.axis[a].seg.size() == 1 && m.axis[a].seg[0].p.mode == dspace::axis_mode::absolute) {
+			if (m.axis[a].seg.size() == 1 && (m.axis[a].seg[0].p.mode == dspace::axis_mode::absolute ||
+				m.axis[a].seg[0].p.mode == dspace::axis_mode::rational)) {
 
 				grid[a] = fit_grid(p.st[a].K);
 
