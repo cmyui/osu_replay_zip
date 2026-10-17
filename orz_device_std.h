@@ -1767,6 +1767,28 @@ namespace standard {
 					other ? &other->at(from) : nullptr, unused, virtual_desktops)
 			};
 
+			// a new device: the chunks before it take it too while it codes them at least as small
+			if (p.mode != dspace::axis_mode::none) {
+
+				const auto cost = [&](const dspace::axis_params& q, size_t a, size_t b) {
+
+					return axis_cost(dspace::encode_axis(q, vals.subspan(a, b - a), dt.subspan(a, b - a), state.exact_text),
+						dt.subspan(a, b - a), axis, state.exact_text);
+				};
+
+				for (size_t k{ m.seg.size() }; k-- > 0 && m.seg[k].p != p;) {
+
+					const size_t a{ m.seg[k].start }, b{ k + 1 < m.seg.size() ? (size_t)m.seg[k + 1].start : from };
+
+					if (cost(p, a, b) > cost(m.seg[k].p, a, b))
+						break;
+
+					m.seg[k].p = p;
+
+				}
+
+			}
+
 			m.seg.push_back({ (u32)from, p });
 
 			from = to;
