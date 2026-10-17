@@ -1395,6 +1395,14 @@ namespace standard {
 
 		std::vector<dspace::axis_params> finals;
 
+		// the variants can repeat a candidate, each is coded once
+		const auto add_final = [&](const dspace::axis_params& q) {
+
+			if (std::find(finals.begin(), finals.end(), q) == finals.end())
+				finals.push_back(q);
+
+		};
+
 		for (const auto& q : cands) {
 
 			// a desktop tablet at speed 1 fits the same every span / gcd(span, 65536) - try the one nearest 0 first
@@ -1415,13 +1423,13 @@ namespace standard {
 					auto r{ q };
 
 					r.tablet.origin = (float)c;
-					finals.push_back(r);
+					add_final(r);
 
 				}
 
 			}
 
-			finals.push_back(q);
+			add_final(q);
 
 			// the game may keep pos - off unrounded so we have to try both (JIT differences?)
 			if (q.mode == dspace::axis_mode::mouse || q.mode == dspace::axis_mode::absolute) {
@@ -1429,7 +1437,7 @@ namespace standard {
 				auto r{ q };
 
 				r.field.wide = !r.field.wide;
-				finals.push_back(r);
+				add_final(r);
 
 			}
 
@@ -1438,9 +1446,9 @@ namespace standard {
 		// keep q when it codes smaller
 		const auto consider = [&](const dspace::axis_params& q) {
 
-			auto st{ dspace::encode_axis(q, vals, dt, state.exact_text, bounds) };
+			// a model that escapes most frames is worse than text ordinals (the encode stops once it has)
+			auto st{ dspace::encode_axis(q, vals, dt, state.exact_text, bounds, vals.size() / 2) };
 
-			// a model that escapes most frames is worse than text ordinals
 			if (st.escapes.size() * 2 > vals.size())
 				return;
 
@@ -1714,7 +1722,7 @@ namespace standard {
 			for (int a{}; a < 2; ++a) {
 
 				q[a] = make(W, H, si, a);
-				st[a] = dspace::encode_axis(q[a], vals[a], dt, state.exact_text);
+				st[a] = dspace::encode_axis(q[a], vals[a], dt, state.exact_text, {}, vals[a].size() / 2);
 
 				if (st[a].escapes.size() * 2 > vals[a].size())
 					cost = SIZE_MAX;
