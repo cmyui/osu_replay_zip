@@ -1438,9 +1438,9 @@ namespace standard {
 		// keep q when it codes smaller
 		const auto consider = [&](const dspace::axis_params& q) {
 
-			auto st{ dspace::encode_axis(q, vals, dt, state.exact_text, bounds) };
+			// a model that escapes most frames is worse than text ordinals (the encode stops once it has)
+			auto st{ dspace::encode_axis(q, vals, dt, state.exact_text, bounds, vals.size() / 2) };
 
-			// a model that escapes most frames is worse than text ordinals
 			if (st.escapes.size() * 2 > vals.size())
 				return;
 
@@ -1714,7 +1714,7 @@ namespace standard {
 			for (int a{}; a < 2; ++a) {
 
 				q[a] = make(W, H, si, a);
-				st[a] = dspace::encode_axis(q[a], vals[a], dt, state.exact_text);
+				st[a] = dspace::encode_axis(q[a], vals[a], dt, state.exact_text, {}, vals[a].size() / 2);
 
 				if (st[a].escapes.size() * 2 > vals[a].size())
 					cost = SIZE_MAX;

@@ -975,7 +975,7 @@ namespace standard {
 
 						q.field.off = a ? oy : ox;
 
-						auto st{ dspace::encode_axis(q, vals[a], dt, state.exact_text) };
+						auto st{ dspace::encode_axis(q, vals[a], dt, state.exact_text, {}, vals[a].size() / 2) };
 
 						if (st.escapes.size() * 2 > vals[a].size())
 							continue;
