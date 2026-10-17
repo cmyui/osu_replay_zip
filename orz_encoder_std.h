@@ -1072,6 +1072,8 @@ namespace standard {
 
 		const _shared_streams shared{ shared_streams(r, flags, state, start, start_time) };
 
+		state.catcher = (flags & ORZ_FLAG::gamemode_fruits) != 0;
+
 		const std::vector<int> dt{ repeat::sample_dt(shared.delta, shared.repeated) };
 
 		std::vector<float> vals[2];
