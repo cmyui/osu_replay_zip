@@ -1395,6 +1395,14 @@ namespace standard {
 
 		std::vector<dspace::axis_params> finals;
 
+		// the variants can repeat a candidate, each is coded once
+		const auto add_final = [&](const dspace::axis_params& q) {
+
+			if (std::find(finals.begin(), finals.end(), q) == finals.end())
+				finals.push_back(q);
+
+		};
+
 		for (const auto& q : cands) {
 
 			// a desktop tablet at speed 1 fits the same every span / gcd(span, 65536) - try the one nearest 0 first
@@ -1415,13 +1423,13 @@ namespace standard {
 					auto r{ q };
 
 					r.tablet.origin = (float)c;
-					finals.push_back(r);
+					add_final(r);
 
 				}
 
 			}
 
-			finals.push_back(q);
+			add_final(q);
 
 			// the game may keep pos - off unrounded so we have to try both (JIT differences?)
 			if (q.mode == dspace::axis_mode::mouse || q.mode == dspace::axis_mode::absolute) {
@@ -1429,7 +1437,7 @@ namespace standard {
 				auto r{ q };
 
 				r.field.wide = !r.field.wide;
-				finals.push_back(r);
+				add_final(r);
 
 			}
 
