@@ -1229,8 +1229,9 @@ namespace standard {
 
 				frames::_escape v{ 0.f, pred };
 
+				// a damaged file can ask for more escapes than it has
 				if (grid_of[a].on)
-					grid_near(info.axis[a].seg[0].p, fd.K[a][fd.escaped[a][n++]], v.near);
+					grid_near(info.axis[a].seg[0].p, fd.K[a].at(fd.escaped[a].at(n++)), v.near);
 
 				return reader.escape(v, a, exact_text);
 			};
