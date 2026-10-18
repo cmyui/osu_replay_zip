@@ -64,9 +64,7 @@ then       the streams, in the order of §3.2; the last runs to the end of the f
 | seeded | 1 bit | the replay ended with a closing seed frame (§3.5) |
 | seed | `length_bucket<3,18>`, if seeded | see below |
 | frame count | `bucket(16)` | frames held by the frames stream, without the seed frame; at most 2^22 |
-| life bar | 1 bit, if `has_osr_header` | the `life_bar` stream is present |
-| `osr_parts` size | `bucket(7)`, if `has_osr_header` | in bytes |
-| `life_bar` size | `bucket()`, if the life bar bit is set | in bytes |
+| `osr_parts` size | `bucket(7)`, if `has_osr_header` | in bytes, life bar included |
 
 `length_bucket<3,18>`:
 
@@ -82,8 +80,7 @@ The streams always come in this order, and the flags say which are present:
 
 | Stream | Present when |
 |---|---|
-| `osr_parts`: the `.osr` bytes around the replay data (§8) | `has_osr_header` |
-| `life_bar`: the life bar text (§9) | `has_osr_header` and the life bar bit |
+| `osr_parts`: the `.osr` bytes around the replay data, and the life bar (§8, §9) | `has_osr_header` |
 | `frames`: the frames (§6, §7) | `replay_verbatim` is clear |
 | `osr_replay_data`: the original LZMA replay data (§10) | `replay_verbatim` is set |
 
@@ -113,8 +110,8 @@ CRC-32C (Castagnoli polynomial), starting from 0 with no final XOR, over:
 1. **Every decoded frame** as 16 little-endian bytes: `i32 delta`, `f32 x`, `f32 y`, `u32 keys`. This includes the
    closing seed frame `{−12345, +0, +0, seed}` when there is one. These are the frames as the decoder rebuilds them
    (§1), not the parsed input.
-2. **`osr_parts`, `life_bar` and `osr_replay_data`, in that order**, each when present and not empty: its `u32` size,
-   then its bytes.
+2. **`osr_parts` and `osr_replay_data`, in that order**, each when present and not empty: its `u32` size, then its
+   bytes.
 3. **The flags**, as a `u32`.
 
 The CRC does not cover the magic, the header layout or the frames stream's own bytes, only what they decode to.
@@ -491,11 +488,16 @@ mapped field → screen → field with the stored screen size and printed as 7-d
 
 ## 8. The `osr_parts` stream
 
-It holds the `.osr` bytes outside the replay data and life bar:
+It holds the `.osr` bytes outside the replay data:
 
 - **the header**: game mode through mods;
+- **the life bar** (§9);
 - **the timestamp**: 8 bytes;
 - **the tail**: what follows the replay data, usually the online score id.
+
+The stream is the header, timestamp and tail in one of two forms, then the life bar to the end of the stream. Both
+forms end where their decoder stops reading (the fields form at the next byte boundary), so whatever bytes follow are
+the life bar. When none follow, the `.osr` had no life bar.
 
 Its first byte picks the form:
 
@@ -511,12 +513,12 @@ Its first byte picks the form:
   - the online score id by kind (none, zero, 32-bit, 64-bit);
   - the rest of the tail.
 
-An encoder only uses the fields form when decoding it gives back all three parts exactly. Strings are rebuilt with the
-`0x0b` marker and a minimal ULEB128 length.
+An encoder only uses the fields form when decoding it gives back all three parts exactly and ends at the same byte.
+Strings are rebuilt with the `0x0b` marker and a minimal ULEB128 length.
 
-## 9. The `life_bar` stream
+## 9. The life bar
 
-Its first byte picks the form:
+The life bar follows the parts in the `osr_parts` stream (§8). Its first byte picks the form:
 
 - **0**: the life bar text as stored.
 - **1, compact**: points of `time|value`, range coded.
