@@ -59,7 +59,7 @@ then       the streams, in the order of §3.2; the last runs to the end of the f
 | Field | Coding | Notes |
 |---|---|---|
 | version | `bucket(4, 8)` | 0. A reader rejects a larger version as "made by a newer version". |
-| flags | `bucket(12)` | §3.3 |
+| flags | `bucket(7)` | §3.3 |
 | crc | 32 bits | §3.4 |
 | seeded | 1 bit | the replay ended with a closing seed frame (§3.5) |
 | seed | `length_bucket<3,18>`, if seeded | see below |
@@ -88,31 +88,40 @@ So exactly one of `frames` and `osr_replay_data` is present, and it is the last 
 
 ### 3.3 Flags
 
-| Bit | Name | Meaning |
+| Bits | Name | Meaning |
 |---|---|---|
-| 0–3 | game mode | `1 << mode` from the `.osr` (osu!, osu!taiko, osu!catch, osu!mania). Not needed to decode. |
-| 4 | `has_osr_header` | the input was a full `.osr`, so the decoder rebuilds one |
-| 5 | `trailing_comma` | the replay text ended with `,` |
-| 6 | `replay_verbatim` | the replay data is stored as-is (§10) |
-| 7 | `text_shortest` | floats print as shortest round-trip text, as in osu!lazer; otherwise as 7 significant digits, as in osu!stable (§4) |
-| 8 | `mania_columns` | frames stream in the osu!mania form (§7) |
-| 9 | `taiko_keys` | frames stream in the osu!taiko form (§7) |
-| 10 | `fruits_catcher` | frames stream in the osu!catch form (§7) |
-| 11 | `relax` | a relax replay; selects the relax prior sets (§5.6) |
+| 0–2 | kind | what the replay is, and so the form of its frames stream (below) |
+| 3 | `has_osr_header` | the input was a full `.osr`, so the decoder rebuilds one |
+| 4 | `trailing_comma` | the replay text ended with `,` |
+| 5 | `replay_verbatim` | the replay data is stored as-is (§10) |
+| 6 | `text_shortest` | floats print as shortest round-trip text, as in osu!lazer; otherwise as 7 significant digits, as in osu!stable (§4) |
 
-None of bits 8–10 means the osu!standard form (§6). That form also carries relax osu!catch (where the cursor drives the
-catcher) and osu!mania replays that do not fit the column form.
+| Kind | Replay | Frames stream |
+|---|---|---|
+| 0 | osu! | osu!standard form (§6) |
+| 1 | osu! relax | osu!standard form, relax |
+| 2 | osu! autopilot | osu!standard form with the autopilot path model (§6.6) |
+| 3 | osu!taiko | osu!taiko form (§7) |
+| 4 | osu!taiko relax | osu!taiko form |
+| 5 | osu!catch | osu!catch form (§7) |
+| 6 | osu!catch relax | osu!standard form, relax (the cursor drives the catcher) |
+| 7 | osu!mania | osu!mania form (§7) |
+
+Relax does not exist in osu!mania, and autopilot only in osu!. Relax selects the relax prior sets (§5.6) and is only
+needed to decode the osu!standard form. The game mode is the `.osr`'s, or the one given with bare replay data, with
+osu! when none is given; it is not needed to decode. osu!mania replays that do not fit the column form are stored as
+kind 0, and so are autopilot replays the path model does not fit (the encoder decides from the frames).
 
 ### 3.4 CRC
 
-CRC-32C (Castagnoli polynomial), starting from 0 with no final XOR, over:
+CRC-32C (Castagnoli polynomial), starting from `0xFFFFFFFF` with no final XOR, over:
 
 1. **Every decoded frame** as 16 little-endian bytes: `i32 delta`, `f32 x`, `f32 y`, `u32 keys`. This includes the
    closing seed frame `{−12345, +0, +0, seed}` when there is one. These are the frames as the decoder rebuilds them
    (§1), not the parsed input.
 2. **`osr_parts` and `osr_replay_data`, in that order**, each when present and not empty: its `u32` size, then its
    bytes.
-3. **The flags**, as a `u32`.
+3. **The flags**, as stored (§3.3), as a `u32`.
 
 The CRC does not cover the magic, the header layout or the frames stream's own bytes, only what they decode to.
 
@@ -127,13 +136,13 @@ The replay text is a list of frames `delta|x|y|keys` separated by `,`, with an o
 an `int` delta, `float` x and y, and `u32` keys. A file stores frames and rebuilds the text by printing them, so the
 format requires the text to be exactly what printing would give.
 
-Frames are joined by `,` with no trailing `,` (bit 5 adds one). `delta` and `keys` print as plain integers, and x and
+Frames are joined by `,` with no trailing `,` (`trailing_comma` adds one). `delta` and `keys` print as plain integers, and x and
 y print in one of two float styles:
 
-- **7 significant digits** (bit 7 clear), as .NET Framework's default formatting:
+- **7 significant digits** (`text_shortest` clear), as .NET Framework's default formatting:
   - the digits are the float's exact binary value rounded half away from zero, with trailing zeros removed;
   - both 0 and −0 print as `0`.
-- **Shortest round-trip** (bit 7 set): the shortest digits that parse back to the same float; −0 prints as `-0`.
+- **Shortest round-trip** (`text_shortest` set): the shortest digits that parse back to the same float; −0 prints as `-0`.
 
 Both styles share one layout, where `e` is the decimal exponent of the leading digit:
 
@@ -302,7 +311,7 @@ by the kind of replay:
 | Set | Replays |
 |---|---|
 | 0, 1, 2 | osu!standard whose device model (§6.3) is rational, mouse or absolute |
-| 3, 4, 5 | the same for relax replays (flag 11) |
+| 3, 4, 5 | the same for relax replays (kinds 1 and 6) |
 | 6 | relax without a device model |
 | 7 | osu!standard without a device model (mostly autopilot) |
 | 8, 9, 10 | osu!taiko, osu!catch, osu!mania |
@@ -338,7 +347,7 @@ change.
      permutation of the 96 symbols, are normative data.
 2. **Time grid**: 3 bits choosing a period from `{50/3, 25, 25/2, 100/3, 20, none}` ms. It is only used as context.
 3. **Device model** for x, then for y: §6.3.
-4. **Autopilot**: 1 bit. If set, the game speed (`small<2>`: 1.0, 1.5 or 0.75) and the screen width and height (§6.6).
+4. **Autopilot**, for kind 2 only: the game speed (`small<2>`: 1.0, 1.5 or 0.75) and the screen width and height (§6.6).
 5. **Native grid** for x, then y: 1 bit. If set, a 48-bit step and a 64-bit offset in 32.32 fixed point, with the sum
    wrapping as a signed 64-bit integer:
 
@@ -367,7 +376,7 @@ Two raw bits come first: whether axis x has escapes, then whether axis y does. T
    - Nothing is coded for frames 0 and 1 when `start_time` is set.
 3. **Repeat** (frames after the first): whether the position is bit-identical to the previous frame's.
 4. **For a new position** (not a repeat):
-   - an autopilot event, if autopilot is on (§6.6);
+   - an autopilot event, for kind 2 (§6.6);
    - then **each axis**, in the order the move predictor expects to move more first:
      1. the move residual: the coded integer's step minus the predicted step;
      2. an escape decision, if the axis has escapes;
@@ -557,7 +566,7 @@ different choices with the same settings.
 
 A decoder only reads what the encoder chose. The format leaves these choices free:
 
-- the device model of each axis, its segments, the native grids and whether autopilot is on;
+- the device model of each axis, its segments, the native grids and whether autopilot is on (kind 2);
 - the order of the delta table;
 - whether to use the compact forms of §8 and §9.
 

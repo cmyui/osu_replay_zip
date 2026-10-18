@@ -104,7 +104,7 @@ namespace {
 		bool start{}, start_time{};
 		std::span<const u8> rest;
 
-		if (!standard::read_head(data, r.side.table, grid, r.info, r.side.ap, grid_of, start, start_time, rest))
+		if (!standard::read_head(data, r.side.table, grid, r.info, (flags & ORZ_FLAG::autopilot_path) != 0, r.side.ap, grid_of, start, start_time, rest))
 			return false;
 
 		r.side.axis = r.info.axis;

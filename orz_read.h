@@ -87,13 +87,13 @@ static bool decode_frames(const std::vector<u8>& raw_bytes, const u32 options, _
 
 	if (!(options & DECODE_SKIP_CRC)) {
 
-		u32 crc{ crc32c(0, R.data(), R.size() * sizeof(_osr_frame)) };
+		u32 crc{ crc32c(ORZ_CRC_SEED, R.data(), R.size() * sizeof(_osr_frame)) };
 
 		for (const orz_tag tag : CRC_PART_TAGS)
 			if (const auto& part{ stream_data[tag] }; part.size())
 				crc = crc32c_part(crc, part.data(), part.size());
 
-		const u32 crc_flags{ header->flags };
+		const u32 crc_flags{ pack_flags(header->flags) };
 
 		crc = crc32c(crc, &crc_flags, sizeof(crc_flags));
 

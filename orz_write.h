@@ -124,7 +124,7 @@ struct _orz_construct {
 
 	static u32 crc_of(std::span<const _osr_frame> frames, const _seed_frame& seed) {
 
-		u32 crc{ crc32c(0, frames.data(), frames.size() * sizeof(_osr_frame)) };
+		u32 crc{ crc32c(ORZ_CRC_SEED, frames.data(), frames.size() * sizeof(_osr_frame)) };
 
 		if (seed.present)
 			crc = crc32c_frame(crc, { -12345, 0.f, 0.f, seed.value });
@@ -153,14 +153,14 @@ struct _orz_construct {
 			if (const auto part{ stream(tag) }; part.size())
 				crc = crc32c_part(crc, part.data(), part.size());
 
-		const u32 crc_flags{ (u32)flags };
+		const u32 stored_flags{ pack_flags(flags) };
 
-		crc = crc32c(crc, &crc_flags, sizeof(crc_flags));
+		crc = crc32c(crc, &stored_flags, sizeof(stored_flags));
 
 		bit_stream h{};
 
 		write_bucket(ORZ_VERSION, h, 4, 8);
-		write_bucket(flags, h, 12);
+		write_bucket(stored_flags, h, 7);
 
 		for (int k{}; k < 32; ++k)
 			h.push_back((crc >> k) & 1);
@@ -206,11 +206,14 @@ namespace modes { void encode(const char* output_file, const _osr& r, const u32 
 
 void encode_replay(const char* output_file, _osr& r, const u32 flags, orz_state& state, bool relax) {
 
+	// osu!mania has no relax
+	const u32 f{ relax && !(flags & ORZ_FLAG::gamemode_mania) ? flags | ORZ_FLAG::relax : flags };
+
 	// CTB replays with relax map the catcher to the x of the cursor, encode the replay through the standard encoder to catch this
 	if ((flags & (ORZ_FLAG::gamemode_mania | ORZ_FLAG::gamemode_taiko)) || ((flags & ORZ_FLAG::gamemode_fruits) && !relax))
-		return modes::encode(output_file, r, flags, state);
+		return modes::encode(output_file, r, f, state);
 
-	standard::encode(output_file, r, relax ? flags | ORZ_FLAG::relax : flags, state);
+	standard::encode(output_file, r, f, state);
 }
 
 bool orz_round_trip_ok(const std::vector<u8>& orz, const std::string& want);
