@@ -49,7 +49,7 @@ only has to print the same 7 significant digits.
 ## 3. Container
 
 ```
-byte 0     magic 'r' (0x72)
+byte 0     magic 0xE6
 byte 1..   header, a bit field padded to a byte boundary
 then       the streams, in the order of §3.2; the last runs to the end of the file
 ```

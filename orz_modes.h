@@ -5,12 +5,18 @@
 // for osu!taiko (the mouse sits at the side of the last pressed key) and osu!mania (y is the scroll speed, its changes
 // are listed up front), the catcher's x for osu!catch. Frames a model can not give are escaped with their values up front.
 
-#include "orz_frames.h"
-
 #include <algorithm>
 #include <bit>
 #include <span>
 #include <vector>
+
+#include "orz_dotnet.h"
+#include "orz_frames.h"
+#include "orz_read.h"
+#include "orz_shared.h"
+#include "orz_state.h"
+#include "orz_time.h"
+#include "orz_write.h"
 
 namespace modes {
 
@@ -606,7 +612,7 @@ namespace modes {
 
 		side.table = frame_time::read_table(head, bit, grid);
 		side.grid = frame_time::_time_grid{ grid };
-		side.exact_text = (flags & ORZ_ENCODE_INFO::text_shortest) != 0;
+		side.exact_text = (flags & ORZ_DECODE_INFO::text_shortest) != 0;
 
 		cm::bit_decoder d{ std::span{ data }.subspan(std::min(data.size(), (bit + 7) / 8)) };
 

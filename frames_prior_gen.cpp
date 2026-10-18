@@ -14,22 +14,23 @@
 //   3. code every replay from fresh models seeded with those counters, then average the mixer weights and apm tables
 //      over the replays where they are not at their flat start. Each round starts from the last one's averages.
 
-#define _CRT_SECURE_NO_WARNINGS
-
-#include "orz_shared.h"
-
-#include "orz_write.h"
-#include "orz_read.h"
-
 #include <algorithm>
 #include <atomic>
 #include <cmath>
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
-#include <numeric>
 #include <string>
 #include <thread>
+
+#include "orz_encoder_std.h"
+#include "orz_frames.h"
+#include "device_space.h"
+#include "orz_modes.h"
+#include "orz_state.h"
+#include "orz_shared.h"
+#include "orz_write.h"
+#include "orz_read.h"
 
 namespace {
 
@@ -67,7 +68,7 @@ namespace {
 
 		const auto c{ read_container(orz) };
 
-		if (!c.valid || (c.header.flags & ORZ_ENCODE_INFO::replay_verbatim))
+		if (!c.valid || (c.header.flags & ORZ_DECODE_INFO::replay_verbatim))
 			return false;
 
 		const u32 flags{ c.header.flags };
@@ -85,7 +86,7 @@ namespace {
 
 			// without the closing seed frame
 			r.R.assign(d.frames.begin(), d.frames.begin() + r.frames);
-			r.prepared = modes::prepare(r.R, mode, (flags & ORZ_ENCODE_INFO::text_shortest) != 0);
+			r.prepared = modes::prepare(r.R, mode, (flags & ORZ_DECODE_INFO::text_shortest) != 0);
 
 			return true;
 		}
@@ -607,7 +608,7 @@ namespace {
 			if (name.starts_with(NAMES[m]))
 				return m;
 
-		return ORZ_ENCODE_INFO::has_osr_header;
+		return ORZ_DECODE_INFO::has_osr_header;
 	}
 
 	template<typename T>

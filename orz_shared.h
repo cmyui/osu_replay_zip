@@ -1,11 +1,8 @@
 #pragma once
 
 #include <algorithm>
-#include <array>
 #include <bit>
-#include <charconv>
 #include <cfloat>
-#include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <emmintrin.h>
@@ -13,8 +10,8 @@
 #include <fstream>
 #include <new>
 #include <span>
-#include <string>
-#include <vector>
+
+#include "Lib/7zTypes.h"
 
 #if defined(_M_FP_FAST) || defined(_M_FP_CONTRACT) || defined(__FAST_MATH__)
 #error "breaks without strict IEEE float maths (/fp:precise)"
@@ -64,28 +61,30 @@ constexpr size_t ORZ_MAX_STREAM{ 1u << 28 };
 enum class orz_kind : u32 { osu, taiko, fruits, mania, osu_relax, taiko_relax, fruits_relax, osu_autopilot };
 
 // the encode info as a file stores it: the kind in the low 3 bits, then a bit each
-enum ORZ_ENCODE_INFO : u32 {
+enum ORZ_DECODE_INFO : u32 {
 
 	kind_bits = 7,
 
-	has_osr_header = 1 << 3,
+	is_valid = 1 << 3,
 
-	trailing_comma = 1 << 4,
+	has_osr_header = 1 << 4,
 
-	replay_verbatim = 1 << 5,
+	trailing_comma = 1 << 5,
 
-	text_shortest = 1 << 6, // floats are 'shortest round-trip' (newer .NET, osu!lazer)
+	replay_verbatim = 1 << 6,
+
+	text_shortest = 1 << 7, // floats are 'shortest round-trip' (newer .NET, osu!lazer)
 
 };
 
-constexpr u32 ORZ_ENCODE_INFO_BITS{ 7 };
+constexpr u32 ORZ_DECODE_INFO_BITS{ 7 };
 
 FORCEINLINE orz_kind info_kind(u32 info) {
-	return (orz_kind)(info & ORZ_ENCODE_INFO::kind_bits);
+	return (orz_kind)(info & ORZ_DECODE_INFO::kind_bits);
 }
 
 FORCEINLINE u32 with_kind(u32 info, orz_kind k) {
-	return (info & ~u32(ORZ_ENCODE_INFO::kind_bits)) | (u32)k;
+	return (info & ~u32(ORZ_DECODE_INFO::kind_bits)) | (u32)k;
 }
 
 // the game mode, numbered as the .osr does (osu!, taiko, catch, mania)
@@ -114,6 +113,7 @@ enum ORZ_OPTION : u32 {
 };
 
 constexpr u32 OSR_MOD_RELAX{ 1 << 7 };
+constexpr u32 OSR_MOD_AUTOPILOT{1 << 13};
 
 enum class orz_tag : u8 {
 
@@ -124,10 +124,6 @@ enum class orz_tag : u8 {
 	osr_replay_data,
 
 };
-
-// replay data is decoded with the LZMA SDK's decoder (Lib), and encoded the way osu! encodes it (osu_lzma.h)
-#include "LzmaDec.h"
-#include "osu_lzma.h"
 
 struct _lzma_block_cache {
 
@@ -593,7 +589,7 @@ u32 read_length_bucket(const _bit_view input, size_t& i) {
 	return value;
 }
 
-constexpr u8 ORZ_MAGIC{ 'r' };
+constexpr u8 ORZ_MAGIC{ 0xE6 };
 
 // tuned to sessions under around 4.7 hours
 constexpr u32 ORZ_SEED_LENGTH{ 18 };
@@ -643,9 +639,9 @@ inline _orz_container read_container(const std::vector<u8>& file) {
 		return c;
 	}
 
-	h.flags = read_bucket(bs, i, ORZ_ENCODE_INFO_BITS);
+	h.flags = read_bucket(bs, i, ORZ_DECODE_INFO_BITS);
 
-	if (h.flags >> ORZ_ENCODE_INFO_BITS)
+	if (h.flags >> ORZ_DECODE_INFO_BITS)
 		return c;
 
 	for (int k{}; k < 32; ++k)
@@ -662,10 +658,10 @@ inline _orz_container read_container(const std::vector<u8>& file) {
 		return c;
 
 	// the streams in their fixed order (_orz_construct::finish)
-	if (h.flags & ORZ_ENCODE_INFO::has_osr_header)
+	if (h.flags & ORZ_DECODE_INFO::has_osr_header)
 		c.streams.push_back({ (u8)orz_tag::osr_parts, read_bucket(bs, i, 7) });
 
-	c.streams.push_back({ (u8)((h.flags & ORZ_ENCODE_INFO::replay_verbatim) ? orz_tag::osr_replay_data : orz_tag::frames) });
+	c.streams.push_back({ (u8)((h.flags & ORZ_DECODE_INFO::replay_verbatim) ? orz_tag::osr_replay_data : orz_tag::frames) });
 
 	c.header_bytes = 1 + (i + 7) / 8;
 
@@ -765,45 +761,3 @@ FORCEINLINE u32 crc32c_part(u32 crc, const u8* data, size_t size) {
 
 	return crc32c(crc32c(crc, &n, 4), data, size);
 }
-
-inline bool decompress_osr_string(const u8* data, size_t size, std::string& out) {
-
-	out.clear();
-
-	if (size <= 5 + 8)
-		return false;
-
-	u32 text_size;
-
-	memcpy(&text_size, data + 5, 4);
-
-	if (text_size > ORZ_MAX_STREAM)
-		return false;
-
-	out.resize(text_size);
-
-	SizeT out_size{ text_size }, in_size{ size - (5 + 8) };
-	ELzmaStatus status{};
-
-	LzmaDecode((u8*)out.data(), &out_size, data + 5 + 8, &in_size, data, 5, LZMA_FINISH_END, &status, &lzma_allocFuncs);
-
-	if (out_size != text_size) {
-
-		out.clear();
-
-		return false;
-	}
-
-	return true;
-}
-
-// the replay text as osu! stores it, so replay data the game wrote comes back byte for byte (osu_lzma.h)
-inline std::vector<u8> compress_osr_string(std::string_view string) {
-	return osu_lzma::compress({ (const u8*)string.data(), string.size() });
-}
-
-#include "orz_state.h"
-
-#include "device_space.h"
-#include "orz_life.h"
-#include "orz_parts.h"

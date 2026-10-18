@@ -7,8 +7,9 @@
 
 #include <algorithm>
 #include <cmath>
-#include <span>
-#include <vector>
+
+#include "device_space.h"
+#include "orz_shared.h"
 
 namespace autopilot {
 

@@ -5,10 +5,14 @@
 #include <cmath>
 #include <map>
 #include <numeric>
-#include <set>
 #include <span>
 #include <unordered_map>
 #include <vector>
+#include <set>
+
+#include "device_space.h"
+#include "orz_shared.h"
+#include "orz_state.h"
 
 namespace standard {
 
@@ -485,7 +489,7 @@ namespace standard {
 
 				const double spacing{ (double)dspace::next_up(a) - a };
 
-				
+
 				static const auto P10 = [] {
 
 					std::array<double, 100> t{};
@@ -552,7 +556,7 @@ namespace standard {
 
 		return n;
 	}
-	
+
 	struct virtual_group {
 		size_t from, to;
 		float ratio, off;
@@ -748,7 +752,7 @@ namespace standard {
 			return none;
 
 		std::vector<std::pair<double, double>> steps{ { s, c } };
-		
+
 		if (refine)
 			neighbour_steps(p, s, steps);
 
@@ -1590,7 +1594,7 @@ namespace standard {
 
 		if (t != 1)
 			neighbour_steps(p[1], sy, ys);
-		
+
 		std::vector<std::pair<double, float>> setups;
 
 		for (const auto& [q, qc] : ys) {
@@ -1618,7 +1622,7 @@ namespace standard {
 				setups.push_back({ aspect, sv[i] });
 
 		}
-		
+
 		if (t < 0) {
 
 			for (const double aspect : { 16. / 9., 16. / 10., 4. / 3., 5. / 4., 21. / 9., 3. / 2., 5. / 3. }) {

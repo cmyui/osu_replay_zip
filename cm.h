@@ -6,9 +6,10 @@
 
 #include <algorithm>
 #include <array>
-#include <cstdint>
 #include <span>
 #include <vector>
+
+#include "orz_shared.h"
 
 namespace cm {
 

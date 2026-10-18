@@ -2,6 +2,9 @@
 
 #include "orz_frames.h"
 #include "orz_device_std.h"
+#include "orz_read.h"
+#include "orz_state.h"
+#include "orz_write.h"
 
 #include <algorithm>
 #include <climits>
@@ -36,7 +39,7 @@ namespace standard {
 				if (repeated[i])
 					continue;
 
-				
+
 				dt.push_back((int)std::clamp<i64>(elapsed, INT_MIN, INT_MAX));
 
 				elapsed = 0;
@@ -57,7 +60,7 @@ namespace standard {
 		}
 
 	}
-		
+
 	struct _shared_streams {
 		_orz_construct time, osr;
 		const _osr* frames;
@@ -201,7 +204,7 @@ namespace standard {
 			return {};
 
 		const double guess{ s }, span{ (double)(d.back() - d.front()) };
-		
+
 		const auto sample = [&](size_t n) {
 
 			std::vector<double> u;
@@ -454,7 +457,7 @@ namespace standard {
 		const auto gain = [&](size_t n) {
 
 			const double f{ (double)n / (double)d.size() };
-			
+
 			return n * 10 < d.size() * 7 ? std::numeric_limits<double>::lowest() : f * std::log2(s) - (1. - f) * 3.;
 		};
 
@@ -837,7 +840,7 @@ namespace standard {
 
 			}
 
-		
+
 		if (use_grid)
 			for (int a{}; a < 2; ++a)
 				if (grid[a].on)
@@ -847,8 +850,9 @@ namespace standard {
 
 		return p;
 	}
-		
-	static void write_orz(const _positions& p, const _shared_streams& shared, orz_state& state) {
+
+	[[nodiscard]]
+	static u32 write_orz(const _positions& p, const _shared_streams& shared, orz_state& state) {
 
 		_orz_construct result{ shared.time };
 
@@ -876,7 +880,7 @@ namespace standard {
 
 		result.append(p.streams);
 		result.append(shared.osr);
-		result.finish("");
+		return result.finish("");
 
 	}
 
@@ -915,7 +919,7 @@ namespace standard {
 		return m;
 	}
 
-	
+
 	// the replay's frames with autopilot moves in place of a device model
 	static _positions autopilot_streams(std::span<const autopilot::sample> s, const autopilot::_params& ap, const std::vector<float> vals[2],
 		const std::vector<int>& dt, const _shared_streams& shared, orz_state& state) {
@@ -954,7 +958,7 @@ namespace standard {
 			}
 
 			if (px.mode != dspace::axis_mode::none || py.mode != dspace::axis_mode::none)
-				refine_window(state, vals, dt, px, py, ws);
+				standard::refine_window(state, vals, dt, px, py, ws);
 
 			// mouase axis are differing, try each other and keep the winners
 			if (px.mode == dspace::axis_mode::mouse && py.mode == dspace::axis_mode::mouse &&
@@ -1051,7 +1055,8 @@ namespace standard {
 		return found;
 	}
 
-	void encode(const char* output_file, const _osr& original, const u32 flags, orz_state& state) {
+	[[nodiscard]]
+	u32 encode(const char* output_file, const _osr& original, const u32 flags, orz_state& state) {
 
 		const bool start{ starts_at_start(original) };
 		const bool start_time{ start && original[0].delta == 0 && original[1].delta == -1 };
@@ -1143,7 +1148,7 @@ namespace standard {
 
 		}
 
-		write_orz(best, shared, state);
+		u32 flags = write_orz(best, shared, state);
 
 		++state.stats.files;
 
@@ -1165,7 +1170,7 @@ namespace standard {
 			write_file(output_file, state.output);
 
 	}
-	
+
 	// the head of the frames stream: delta table, time grid, device model, autopilot and tablet grids; rest: what follows from the next byte.
 	// autopilot: the flag, whether autopilot parameters follow
 	inline bool read_head(std::span<const u8> data, std::vector<int>& table, u32& grid, dspace::_model_info& info, bool autopilot,
@@ -1223,14 +1228,14 @@ namespace standard {
 				for (auto& k : fd.K[a])
 					k = grid_value(grid_of[a], k);
 
-		const bool exact_text{ (header->flags & ORZ_ENCODE_INFO::text_shortest) != 0 };
+		const bool exact_text{ (header->flags & ORZ_DECODE_INFO::text_shortest) != 0 };
 
 		std::vector<float> out;
 
 		for (int a{}; a < 2; ++a) {
 
 			size_t n{};
-			
+
 			const auto escape_value = [&](float pred) {
 
 				frames::_escape v{ 0.f, pred };

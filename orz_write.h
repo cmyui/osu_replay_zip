@@ -1,7 +1,13 @@
 #pragma once
 
-#include <algorithm>
-#include <cmath>
+#include <vector>
+
+#include "orz_life.h"
+#include "orz_parts.h"
+#include "orz_shared.h"
+#include "orz_state.h"
+#include "orz_text.h"
+#include "osu_lzma.h"
 
 void add_to_u8(std::vector<u8>& output, u32 input) {
 
@@ -97,10 +103,10 @@ struct _orz_construct {
 
 	}
 
-	void write(const char* output_file) {
+	u32 write(const char* output_file) {
 
 		add_osr_parts();
-		finish(output_file);
+		return finish(output_file);
 
 	}
 
@@ -132,7 +138,8 @@ struct _orz_construct {
 		return crc;
 	}
 
-	void finish(const char* output_file) {
+	[[nodiscard]]
+	u32 finish(const char* output_file) {
 
 		// a stream's bytes, empty when absent
 		const auto stream = [&](orz_tag tag) {
@@ -147,7 +154,7 @@ struct _orz_construct {
 		};
 
 		// the CRC continues over the stored .osr parts, in CRC_PART_TAGS order
-		u32 crc{ frames_crc };
+		u32 crc = 0;
 
 		for (const orz_tag tag : CRC_PART_TAGS)
 			if (const auto part{ stream(tag) }; part.size())
@@ -158,7 +165,7 @@ struct _orz_construct {
 		bit_stream h{};
 
 		write_bucket(ORZ_VERSION, h, 4, 8);
-		write_bucket(flags, h, ORZ_ENCODE_INFO_BITS);
+		write_bucket(flags, h, ORZ_DECODE_INFO_BITS);
 
 		for (int k{}; k < 32; ++k)
 			h.push_back((crc >> k) & 1);
@@ -173,10 +180,10 @@ struct _orz_construct {
 		// the streams go in a fixed order, so the flags say which are there: with an .osr its parts (life bar included),
 		// then the replay (verbatim or frames), which runs to the end of the file
 		const auto parts{ stream(orz_tag::osr_parts) };
-		const auto replay{ stream((flags & ORZ_ENCODE_INFO::replay_verbatim) ? orz_tag::osr_replay_data : orz_tag::frames) };
+		const auto replay{ stream((flags & ORZ_DECODE_INFO::replay_verbatim) ? orz_tag::osr_replay_data : orz_tag::frames) };
 
 		// parts in the fields form take 44 to 72 bytes, and most with a life bar stay under 127
-		if (flags & ORZ_ENCODE_INFO::has_osr_header)
+		if (flags & ORZ_DECODE_INFO::has_osr_header)
 			write_bucket((u32)parts.size(), h, 7);
 
 		std::vector<u8> final_file{};
@@ -194,6 +201,8 @@ struct _orz_construct {
 			write_file(output_file, final_file);
 
 		state->output = std::move(final_file);
+
+		return flags;
 
 	}
 
@@ -221,7 +230,45 @@ void encode_replay(const char* output_file, _osr& r, const u32 flags, orz_state&
 
 bool orz_round_trip_ok(const std::vector<u8>& orz, const std::string& want);
 
-static void encode_osr(const std::vector<u8>& raw_file, const char* out_file, u32 flags, orz_state& state) {
+enum class InputType {
+	OsrFileWithHeader = 0,
+	OsrFileWithoutHeader,
+	OrzFile,
+	Invalid,
+};
+
+
+InputType get_input_type(const std::vector<u8>& raw_file) {
+	if (raw_file.size() < 6) {
+		return InputType::Invalid;
+	}
+
+	#pragma pack(push, 1)
+
+	struct _osr_start {
+		u8 gamemode; u32 game_version;
+	};
+
+	#pragma pack(pop)
+
+	const auto* data = (_osr_start*)raw_file.data();
+
+	if (raw_file[0] == ORZ_MAGIC) {
+
+		return InputType::OrzFile;
+	}
+
+	if (data->gamemode <= 3 &&
+		data->game_version >= 2007'01'01 &&
+		data->game_version <= 3007'01'01) {
+
+		return InputType::OsrFileWithHeader;
+	}
+
+	return InputType::OsrFileWithoutHeader;
+};
+
+static u32 encode_osr(const std::vector<u8>& raw_file, const char* out_file, orz_state& state) {
 
 	{
 
@@ -234,8 +281,9 @@ static void encode_osr(const std::vector<u8>& raw_file, const char* out_file, u3
 
 	}
 
-	if (raw_file.size() < 128)
-		return;
+	const auto input_type = get_input_type(raw_file);
+	if (input_type == InputType::Invalid)
+		return 0;
 
 	const size_t file_size{ raw_file.size() };
 
@@ -283,13 +331,14 @@ static void encode_osr(const std::vector<u8>& raw_file, const char* out_file, u3
 	bool relax{ (state.options & ENCODE_RELAX) != 0 };
 
 	auto& header_bytes{ state.osr_header };
+	u32 flags;
 
-	if (flags & ORZ_ENCODE_INFO::has_osr_header) {
+	if (input_type == InputType::OsrFileWithHeader) {
 
 		if (raw_file[0] > 3) // if the osr isnt for one of the main 4 game modes, abort
-			return;
+			return 0;
 
-		flags = with_kind(flags, (orz_kind)raw_file[0]);
+		flags = raw_file[0]; // todo plz remember to put the relaxa/p in here
 
 		const bool ok {
 			skip(1) && skip(4) && // gamemode, game version
@@ -297,7 +346,7 @@ static void encode_osr(const std::vector<u8>& raw_file, const char* out_file, u3
 		};
 
 		if (!ok)
-			return;
+			return 0;
 
 		#pragma pack(push, 1)
 
@@ -318,14 +367,14 @@ static void encode_osr(const std::vector<u8>& raw_file, const char* out_file, u3
 		const auto* header_values{ (const _osr_header_values*)(raw_file.data() + pos) };
 
 		if (!skip(sizeof(_osr_header_values)))
-			return;
+			return 0;
 
 		relax |= (header_values->mods & OSR_MOD_RELAX) != 0;
 
 		const size_t life_start{ pos };
 
 		if (!skip_string())
-			return;
+			return 0;
 
 		const size_t life_end{ pos };
 
@@ -344,7 +393,7 @@ static void encode_osr(const std::vector<u8>& raw_file, const char* out_file, u3
 		}
 
 		if (!skip(8)) // time stamp
-			return;
+			return 0;
 
 		header_bytes.assign(raw_file.begin(), raw_file.begin() + life_start);
 
@@ -354,7 +403,7 @@ static void encode_osr(const std::vector<u8>& raw_file, const char* out_file, u3
 			state.life = { true, std::string() };
 
 		if (pos + 4 > file_size)
-			return;
+			return 0;
 
 		u32 compressed{};
 
@@ -376,7 +425,7 @@ static void encode_osr(const std::vector<u8>& raw_file, const char* out_file, u3
 
 	const u8* const lzma_start{ raw_file.data() + lzma_offset };
 
-	const auto write_verbatim = [&]() {
+	const u32 write_verbatim = [&]() {
 
 		state.seed = {};
 		state.exact_text = false;
@@ -384,15 +433,15 @@ static void encode_osr(const std::vector<u8>& raw_file, const char* out_file, u3
 
 		_orz_construct result{ &state };
 
-		result.flags = flags | ORZ_ENCODE_INFO::replay_verbatim;
+		result.flags = flags | ORZ_DECODE_INFO::replay_verbatim;
 		result.frames_crc = _orz_construct::crc_of(state.input, {});
-		result.write(out_file);
+		return result.write(out_file);
 
 	};
 
 	state.input_size = lzma_size;
 
-	if (!decompress_osr_string(lzma_start, lzma_size, state.text)) {
+	if (!osu_lzma::decompress_osr_string(lzma_start, lzma_size, state.text)) {
 
 		write_verbatim();
 
@@ -417,7 +466,7 @@ static void encode_osr(const std::vector<u8>& raw_file, const char* out_file, u3
 
 		if (body.size() && body.back() == ',') {
 
-			text_flags |= ORZ_ENCODE_INFO::trailing_comma;
+			text_flags |= ORZ_DECODE_INFO::trailing_comma;
 			body.remove_suffix(1);
 
 		}
@@ -427,11 +476,11 @@ static void encode_osr(const std::vector<u8>& raw_file, const char* out_file, u3
 			state.exact_text = true;
 
 			if (orz_text::frames_text(replay_stream, state.exact_text) == body)
-				text_flags |= ORZ_ENCODE_INFO::text_shortest;
+				text_flags |= ORZ_DECODE_INFO::text_shortest;
 			else {
 
 				state.exact_text = false;
-				text_flags |= ORZ_ENCODE_INFO::replay_verbatim;
+				text_flags |= ORZ_DECODE_INFO::replay_verbatim;
 
 			}
 
@@ -439,14 +488,7 @@ static void encode_osr(const std::vector<u8>& raw_file, const char* out_file, u3
 
 	}
 
-	// osu!mania x is held to the column form below instead
-	const bool mania{ info_kind(flags) == orz_kind::mania };
-
-	for (const auto& f : replay_stream)
-		if (!(mania || std::abs(f.x) <= 131072.f) || !(std::abs(f.y) <= 131072.f)) // catches NaN too
-			text_flags |= ORZ_ENCODE_INFO::replay_verbatim;
-
-	if (text_flags & ORZ_ENCODE_INFO::replay_verbatim) {
+	if (text_flags & ORZ_DECODE_INFO::replay_verbatim) {
 
 		write_verbatim();
 
@@ -469,7 +511,7 @@ static void encode_osr(const std::vector<u8>& raw_file, const char* out_file, u3
 	}
 
 	// the osu!mania form only holds columns
-	if (mania && !modes::fits_columns(replay_stream)) {
+	if (info_kind(flags) == orz_kind::mania && !modes::fits_columns(replay_stream)) {
 
 		write_verbatim();
 
@@ -481,23 +523,24 @@ static void encode_osr(const std::vector<u8>& raw_file, const char* out_file, u3
 	if ((state.options & ENCODE_CHECK_ROUND_TRIP) && !orz_round_trip_ok(state.output, state.text))
 		write_verbatim(); // overwrites result of encode_replay
 
+	return;
 }
 
 // an .osr (or bare replay data) in memory: the .orz goes to state.output
-void osr_to_orz(const std::vector<u8>& input, const u32 flags, orz_state& state) {
+u32 osr_to_orz(const std::vector<u8>& input, orz_state& state) {
 
 	try {
-		encode_osr(input, "", flags, state);
+		return encode_osr(input, "", state);
 	} catch (const std::exception&) {
 		state.output.clear(); // nothing is written for input the encoder can not handle
 	}
 
 }
 
-void osr_to_orz(const char* in_file, const char* out_file, const u32 flags, orz_state& state) {
+u32 osr_to_orz(const char* in_file, const char* out_file, orz_state& state) {
 
 	try {
-		encode_osr(read_file(in_file), out_file, flags, state);
+		return encode_osr(read_file(in_file), out_file, state);
 	} catch (const std::exception&) {
 		state.output.clear();
 	}

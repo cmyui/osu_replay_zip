@@ -1,11 +1,14 @@
 #pragma once
 
-#include "life_prior.h"
-
 #include <charconv>
 #include <span>
 #include <string>
 #include <vector>
+
+#include "life_prior.h"
+#include "orz_dotnet.h"
+#include "orz_shared.h"
+#include "rc.h"
 
 namespace life {
 

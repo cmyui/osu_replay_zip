@@ -1,6 +1,12 @@
 #pragma once
 
+#include "orz_life.h"
+#include "orz_parts.h"
 #include "orz_shared.h"
+#include "orz_text.h"
+#include "orz_write.h"
+#include "osu_lzma.h"
+
 
 struct _stream_map {
 
@@ -64,7 +70,7 @@ static bool decode_frames(const std::vector<u8>& raw_bytes, const u32 options, _
 	std::vector<_osr_frame> R(header->frame_count);
 
 	const bool other_mode{ kind_other_frames(info_kind(header->flags)) };
-	const bool verbatim{ (header->flags & ORZ_ENCODE_INFO::replay_verbatim) != 0 }; // there is no frames stream
+	const bool verbatim{ (header->flags & ORZ_DECODE_INFO::replay_verbatim) != 0 }; // there is no frames stream
 
 	if (!verbatim && !(other_mode ? modes::decode(header, stream_data, R) : standard::decode(header, stream_data, R)))
 		return false;
@@ -80,7 +86,7 @@ static bool decode_frames(const std::vector<u8>& raw_bytes, const u32 options, _
 		std::string text;
 
 		// a score saved without a replay (no data) or data that never decompressed
-		R = decompress_osr_string(data.data(), data.size(), text) ?
+		R = osu_lzma::decompress_osr_string(data.data(), data.size(), text) ?
 			orz_text::parse_frames(text.data(), text.size()) :
 			std::vector<_osr_frame>{};
 
@@ -119,20 +125,20 @@ bool orz_decode_frames(const std::vector<u8>& raw_bytes, _decoded_orz& out, cons
 
 std::string replay_text(const std::vector<_osr_frame>& R, u32 flags, const _stream_map& stream_data) {
 
-	if (flags & ORZ_ENCODE_INFO::replay_verbatim) {
+	if (flags & ORZ_DECODE_INFO::replay_verbatim) {
 
 		const auto& data{ stream_data[orz_tag::osr_replay_data] };
 
 		std::string text;
 
-		decompress_osr_string(data.data(), data.size(), text);
+		osu_lzma::decompress_osr_string(data.data(), data.size(), text);
 
 		return text;
 	}
 
-	std::string text{ orz_text::frames_text(R, (flags & ORZ_ENCODE_INFO::text_shortest) != 0) };
+	std::string text{ orz_text::frames_text(R, (flags & ORZ_DECODE_INFO::text_shortest) != 0) };
 
-	if (flags & ORZ_ENCODE_INFO::trailing_comma)
+	if (flags & ORZ_DECODE_INFO::trailing_comma)
 		text += ',';
 
 	return text;
@@ -149,14 +155,14 @@ static bool decode_to_osr(const std::vector<u8>& raw_bytes, std::vector<u8>& fin
 
 	const auto parts{ osr_parts::decode(stream_data[orz_tag::osr_parts]) };
 
-	const std::vector<u8> compressed_string{ (flags & ORZ_ENCODE_INFO::replay_verbatim) ?
+	const std::vector<u8> compressed_string{ (flags & ORZ_DECODE_INFO::replay_verbatim) ?
 		stream_data[orz_tag::osr_replay_data] :
-		compress_osr_string(replay_text(R, flags, stream_data))
+		osu_lzma::compress_osr_string(replay_text(R, flags, stream_data))
 	};
 
 	final_file_output.clear();
 
-	if (flags & ORZ_ENCODE_INFO::has_osr_header) {
+	if (flags & ORZ_DECODE_INFO::has_osr_header) {
 
 		// header chunk, life graph, chunk up to the replay data length
 
@@ -217,7 +223,3 @@ bool orz_round_trip_ok(const std::vector<u8>& orz, const std::string& want) {
 
 	return orz_decode_frames(orz, d) && replay_text(d.frames, d.flags, d.streams) == want;
 }
-
-#include "orz_time.h"
-#include "orz_encoder_std.h"
-#include "orz_modes.h"

@@ -1,7 +1,8 @@
 #pragma once
 
 #include <string>
-#include <vector>
+
+#include "orz_shared.h"
 
 struct _seed_frame {
 	bool present;

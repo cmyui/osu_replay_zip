@@ -5,15 +5,17 @@
 // follow the frames. Every value is a sequence of binary decisions coded with context mixing (cm.h), and one templated
 // loop serves encoder, decoder and prior training.
 
-#include "cm.h"
-#include "frames_prior.h"
-#include "orz_autopilot.h"
-
 #include <algorithm>
 #include <array>
 #include <bit>
-#include <span>
 #include <vector>
+
+#include "cm.h"
+#include "device_space.h"
+#include "frames_prior.h"
+#include "orz_autopilot.h"
+#include "orz_shared.h"
+#include "orz_time.h"
 
 namespace frames {
 

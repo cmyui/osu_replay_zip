@@ -5,13 +5,13 @@
 // a replay md5 that a known formula gives back as that formula's index, numbers in buckets. Anything else stays raw.
 // The coded life bar (orz_life.h) follows them, to the end of the stream.
 
-#include <array>
-#include <bit>
 #include <charconv>
 #include <span>
 #include <string>
 #include <string_view>
-#include <vector>
+
+#include "orz_shared.h"
+#include "rc.h"
 
 // unsigned leb128, as .osr strings give their length
 inline void add_uleb128(std::vector<u8>& output, u32 v) {

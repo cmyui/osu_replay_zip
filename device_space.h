@@ -5,9 +5,8 @@
 // Frames a model can not reproduce are escaped.
 
 #include <bit>
-#include <climits>
+#include "orz_dotnet.h"
 #include "rc.h"
-#include "orz_text.h"
 #include "orz_decimal.h"
 #include <cmath>
 #include <algorithm>
@@ -376,14 +375,14 @@ namespace dspace {
 		i64 dk, n, m;
 		float list[20];
 		int count{}, next_split{};
-				
+
 		_mouse_candidates(const axis_params& p_, float X_, i64 dk_, int dt, float first) : p{ p_ }, X{ X_ }, dk{ dk_ } {
 
 			list[count++] = first;
 			next_split = 1;
 
 			n = dk < 0 ? -dk : dk;
-			
+
 			if (dk == 0) {
 
 				m = 1;
@@ -393,7 +392,7 @@ namespace dspace {
 				m = mouse_reports(p, dk, dt);
 
 		}
-				
+
 		bool get(int k, float& out) {
 
 			if (k > 2 * MOUSE_SLACK_RANGE)
@@ -438,7 +437,7 @@ namespace dspace {
 		}
 
 	};
-	
+
 	FORCEINLINE int slack_of_index(int k) {
 		return (int)rc::unzz((u64)k);
 	}
@@ -1120,9 +1119,9 @@ namespace dspace {
 
 		return true;
 	}
-	
+
 	constexpr u32 POLL_RATES[]{ 125, 250, 500, 1000, 2000, 4000, 8000 };
-	
+
 	inline void write_poll(float poll, bit_stream& o) {
 
 		u32 k{};

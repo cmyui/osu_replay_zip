@@ -8,11 +8,13 @@
 
 #include <algorithm>
 #include <array>
-#include <cstdint>
 #include <cstring>
 #include <memory>
 #include <span>
 #include <vector>
+
+#include "Lib/LzmaDec.h"
+#include "orz_shared.h"
 
 namespace osu_lzma {
 
@@ -1947,6 +1949,42 @@ namespace osu_lzma {
 		e->encode(data, out);
 
 		return out;
+	}
+
+	// the replay text as osu! stores it, so replay data the game wrote comes back byte for byte (osu_lzma.h)
+	inline std::vector<u8> compress_osr_string(std::string_view string) {
+		return osu_lzma::compress({ (const u8*)string.data(), string.size() });
+	}
+
+	inline bool decompress_osr_string(const u8* data, size_t size, std::string& out) {
+
+		out.clear();
+
+		if (size <= 5 + 8)
+			return false;
+
+		u32 text_size;
+
+		memcpy(&text_size, data + 5, 4);
+
+		if (text_size > ORZ_MAX_STREAM)
+			return false;
+
+		out.resize(text_size);
+
+		SizeT out_size{ text_size }, in_size{ size - (5 + 8) };
+		ELzmaStatus status{};
+
+		LzmaDecode((u8*)out.data(), &out_size, data + 5 + 8, &in_size, data, 5, LZMA_FINISH_END, &status, &lzma_allocFuncs);
+
+		if (out_size != text_size) {
+
+			out.clear();
+
+			return false;
+		}
+
+		return true;
 	}
 
 }
