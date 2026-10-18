@@ -641,9 +641,11 @@ inline _orz_container read_container(const std::vector<u8>& file) {
 
 	c.streams.resize(h.data_count);
 
+	u32 next_tag{};
+
 	for (auto& s : c.streams) {
 
-		const u32 tag{ read_bucket(bs, i, 3) };
+		const u64 tag{ next_tag + (u64)read_bucket(bs, i, 1, 2) };
 
 		s.size = read_bucket(bs, i);
 
@@ -651,6 +653,7 @@ inline _orz_container read_container(const std::vector<u8>& file) {
 			return c;
 
 		s.tag = (u8)tag;
+		next_tag = s.tag + 1u;
 
 	}
 

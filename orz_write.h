@@ -68,6 +68,7 @@ struct _orz_construct {
 
 	std::vector<u8> file_data;
 
+	// streams are added in rising tag order
 	void add_stream(orz_tag tag, const void* src, size_t size) {
 
 		if (data_count == 255 || size == 0) [[unlikely]]
@@ -116,9 +117,6 @@ struct _orz_construct {
 
 		}
 
-		if (st.replay_data.present)
-			add_stream(orz_tag::osr_replay_data, st.replay_data.bytes.data(), st.replay_data.bytes.size());
-
 		if (st.life.present) {
 
 			const auto bytes{ life::encode(st.life.text, st.input) };
@@ -126,6 +124,9 @@ struct _orz_construct {
 			add_stream(orz_tag::life_bar, bytes.data(), bytes.size());
 
 		}
+
+		if (st.replay_data.present)
+			add_stream(orz_tag::osr_replay_data, st.replay_data.bytes.data(), st.replay_data.bytes.size());
 
 	}
 
@@ -181,10 +182,15 @@ struct _orz_construct {
 		write_bucket(frame_count, h, 16);
 		write_bucket(data_count, h, 3);
 
+		// tags rise, so each is coded as its gap past the previous one
+		u32 next_tag{};
+
 		for (size_t i{}; i < data_count; ++i) {
 
-			write_bucket((u32)tag_table[i], h, 3);
+			write_bucket((u32)tag_table[i] - next_tag, h, 1, 2);
 			write_bucket(size_table[i], h);
+
+			next_tag = (u32)tag_table[i] + 1;
 
 		}
 
