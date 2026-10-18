@@ -65,7 +65,7 @@ then       stream payloads, concatenated in stream-table order
 | seed | `length_bucket<3,18>`, if seeded | see below |
 | frame count | `bucket(16)` | frames held by the frames stream, without the seed frame; at most 2^22 |
 | stream count | `bucket(3)` | at most 256 |
-| per stream: tag, size | tag `bucket(3)`, size `bucket()` | sizes in bytes |
+| per stream: tag, size | tag gap `bucket(1, 2)`, size `bucket()` | tags in rising order; sizes in bytes |
 
 `length_bucket<3,18>`:
 
@@ -73,8 +73,9 @@ then       stream payloads, concatenated in stream-table order
 - code 7 escapes: 5 bits of `bitlen < 18 ? bitlen : bitlen − 7` follow;
 - then the `bitlen − 1` bits below the leading 1.
 
-A reader finds streams by tag; for a repeated tag the first one counts. Each stream must fit in the file. Bytes after
-the last stream are ignored.
+Streams appear in rising tag order, each tag at most once. Each tag is coded as its gap past the previous one: the
+first tag as itself, each later tag as `tag − previous − 1`. A tag above 255 makes the file invalid. Each stream must
+fit in the file. Bytes after the last stream are ignored.
 
 ### 3.2 Streams
 
