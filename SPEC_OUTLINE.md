@@ -51,7 +51,7 @@ only has to print the same 7 significant digits.
 ```
 byte 0     magic 'r' (0x72)
 byte 1..   header, a bit field padded to a byte boundary
-then       stream payloads, concatenated in stream-table order
+then       the streams, in the order of §3.2; the last runs to the end of the file
 ```
 
 ### 3.1 Header (in order)
@@ -64,8 +64,9 @@ then       stream payloads, concatenated in stream-table order
 | seeded | 1 bit | the replay ended with a closing seed frame (§3.5) |
 | seed | `length_bucket<3,18>`, if seeded | see below |
 | frame count | `bucket(16)` | frames held by the frames stream, without the seed frame; at most 2^22 |
-| stream count | `bucket(3)` | at most 256 |
-| per stream: tag, size | tag gap `bucket(1, 2)`, size `bucket()` | tags in rising order; sizes in bytes |
+| life bar | 1 bit, if `has_osr_header` | the `life_bar` stream is present |
+| `osr_parts` size | `bucket(7)`, if `has_osr_header` | in bytes |
+| `life_bar` size | `bucket()`, if the life bar bit is set | in bytes |
 
 `length_bucket<3,18>`:
 
@@ -73,18 +74,20 @@ then       stream payloads, concatenated in stream-table order
 - code 7 escapes: 5 bits of `bitlen < 18 ? bitlen : bitlen − 7` follow;
 - then the `bitlen − 1` bits below the leading 1.
 
-Streams appear in rising tag order, each tag at most once. Each tag is coded as its gap past the previous one: the
-first tag as itself, each later tag as `tag − previous − 1`. A tag above 255 makes the file invalid. Each stream must
-fit in the file. Bytes after the last stream are ignored.
+The replay stream has no size field: it takes every byte after the streams before it, which must fit in the file.
 
 ### 3.2 Streams
 
-| Tag | Stream | Present when |
-|---|---|---|
-| 0 | `frames`: the frames (§6, §7) | the replay is not stored verbatim |
-| 1 | `osr_parts`: the `.osr` bytes around the replay data (§8) | the input was an `.osr` |
-| 2 | `life_bar`: the life bar text (§9) | the `.osr` had a life bar |
-| 3 | `osr_replay_data`: the original LZMA replay data (§10) | the replay is stored verbatim |
+The streams always come in this order, and the flags say which are present:
+
+| Stream | Present when |
+|---|---|
+| `osr_parts`: the `.osr` bytes around the replay data (§8) | `has_osr_header` |
+| `life_bar`: the life bar text (§9) | `has_osr_header` and the life bar bit |
+| `frames`: the frames (§6, §7) | `replay_verbatim` is clear |
+| `osr_replay_data`: the original LZMA replay data (§10) | `replay_verbatim` is set |
+
+So exactly one of `frames` and `osr_replay_data` is present, and it is the last stream (the replay).
 
 ### 3.3 Flags
 
@@ -110,7 +113,8 @@ CRC-32C (Castagnoli polynomial), starting from 0 with no final XOR, over:
 1. **Every decoded frame** as 16 little-endian bytes: `i32 delta`, `f32 x`, `f32 y`, `u32 keys`. This includes the
    closing seed frame `{−12345, +0, +0, seed}` when there is one. These are the frames as the decoder rebuilds them
    (§1), not the parsed input.
-2. **For tags 1, 2 and 3 in that order**, when the stream is present and not empty: its `u32` size, then its bytes.
+2. **`osr_parts`, `life_bar` and `osr_replay_data`, in that order**, each when present and not empty: its `u32` size,
+   then its bytes.
 3. **The flags**, as a `u32`.
 
 The CRC does not cover the magic, the header layout or the frames stream's own bytes, only what they decode to.
@@ -525,8 +529,8 @@ frequency models and their priors are normative for this form.
 
 ## 10. Verbatim replay data
 
-When the replay text cannot be stored as frames (§4), the original LZMA bytes are stored in stream 3, with no frames
-stream and a frame count of 0.
+When the replay text cannot be stored as frames (§4), the original LZMA bytes are stored as the `osr_replay_data`
+stream, with no frames stream and a frame count of 0.
 
 ## 11. Rebuilding the `.osr`
 
