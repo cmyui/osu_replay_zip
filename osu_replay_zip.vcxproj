@@ -152,62 +152,17 @@
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
-    <ClCompile Include="Lib\7zAlloc.c" />
-    <ClCompile Include="Lib\7zArcIn.c" />
-    <ClCompile Include="Lib\7zBuf.c" />
-    <ClCompile Include="Lib\7zBuf2.c" />
-    <ClCompile Include="Lib\7zCrc.c" />
-    <ClCompile Include="Lib\7zCrcOpt.c" />
-    <ClCompile Include="Lib\7zDec.c" />
-    <ClCompile Include="Lib\7zStream.c" />
-    <ClCompile Include="Lib\Alloc.c" />
-    <ClCompile Include="Lib\Bcj2.c" />
-    <ClCompile Include="Lib\Bcj2Enc.c" />
-    <ClCompile Include="Lib\Bra.c" />
-    <ClCompile Include="Lib\Bra86.c" />
-    <ClCompile Include="Lib\BraIA64.c" />
-    <ClCompile Include="Lib\CpuArch.c" />
-    <ClCompile Include="Lib\Delta.c" />
-    <ClCompile Include="Lib\DllSecur.c" />
-    <ClCompile Include="Lib\LzFind.c" />
-    <ClCompile Include="Lib\LzFindMt.c" />
-    <ClCompile Include="Lib\Lzma86Dec.c" />
-    <ClCompile Include="Lib\Lzma86Enc.c" />
     <ClCompile Include="Lib\LzmaDec.c" />
-    <ClCompile Include="Lib\LzmaEnc.c" />
-    <ClCompile Include="Lib\LzmaLib.c" />
-    <ClCompile Include="Lib\Sort.c" />
-    <ClCompile Include="Lib\Threads.c" />
     <ClCompile Include="Source.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="cm.h" />
     <ClInclude Include="device_space.h" />
     <ClInclude Include="frames_prior.h" />
-    <ClInclude Include="Lib\7z.h" />
-    <ClInclude Include="Lib\7zAlloc.h" />
-    <ClInclude Include="Lib\7zBuf.h" />
-    <ClInclude Include="Lib\7zCrc.h" />
     <ClInclude Include="Lib\7zTypes.h" />
-    <ClInclude Include="Lib\7zVersion.h" />
-    <ClInclude Include="Lib\Alloc.h" />
-    <ClInclude Include="Lib\Bcj2.h" />
-    <ClInclude Include="Lib\Bra.h" />
     <ClInclude Include="Lib\Compiler.h" />
-    <ClInclude Include="Lib\CpuArch.h" />
-    <ClInclude Include="Lib\Delta.h" />
-    <ClInclude Include="Lib\DllSecur.h" />
-    <ClInclude Include="Lib\LzFind.h" />
-    <ClInclude Include="Lib\LzFindMt.h" />
-    <ClInclude Include="Lib\LzHash.h" />
-    <ClInclude Include="Lib\Lzma86.h" />
     <ClInclude Include="Lib\LzmaDec.h" />
-    <ClInclude Include="Lib\LzmaEnc.h" />
-    <ClInclude Include="Lib\LzmaLib.h" />
     <ClInclude Include="Lib\Precomp.h" />
-    <ClInclude Include="Lib\RotateDefs.h" />
-    <ClInclude Include="Lib\Sort.h" />
-    <ClInclude Include="Lib\Threads.h" />
     <ClInclude Include="life_prior.h" />
     <ClInclude Include="orz_autopilot.h" />
     <ClInclude Include="orz_decimal.h" />
@@ -224,6 +179,7 @@
     <ClInclude Include="orz_text.h" />
     <ClInclude Include="orz_time.h" />
     <ClInclude Include="orz_write.h" />
+    <ClInclude Include="osu_lzma.h" />
     <ClInclude Include="rc.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />

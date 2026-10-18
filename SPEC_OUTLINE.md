@@ -18,8 +18,8 @@ Decoding gives back:
 - **the replay text exactly** (the LZMA-decompressed `delta|x|y|keys,` list);
 - **the `.osr` bytes around the replay data exactly**: the header, the life bar text, the timestamp and the bytes
   after the replay data (exceptions in §13);
-- **the LZMA bytes of the replay data recompressed**, so generally not the original bytes. Files that store the
-  replay data verbatim (§10) are the exception.
+- **the LZMA bytes of the replay data recompressed** the way osu! compresses them (§11), which gives back the original
+  bytes for replay data osu! wrote. Files that store the replay data verbatim (§10) come back exactly too.
 
 Frames are reproduced to the text they print as, not always bit for bit. With classic 7-digit text (§4), a float
 only has to print the same 7 significant digits.
@@ -549,7 +549,9 @@ Without `has_osr_header`, it writes the replay data and tail only.
 
 **The replay data** is the verbatim bytes (§10), or the text of §4 compressed again as an LZMA stream: 5 property
 bytes, the `u64` size and no end mark. The compression settings are the decoder's choice. The reference decoder
-defaults to fast settings, with an option that matches osu!stable's.
+compresses the way osu! does, so replay data osu! wrote comes back byte for byte: the LZMA SDK's C# encoder with a
+2 MiB dictionary, lc 3, lp 0, pb 2, 255 fast bytes, the BT4 match finder and no end mark. The SDK's C encoder makes
+different choices with the same settings.
 
 ## 12. What the encoder chooses
 
