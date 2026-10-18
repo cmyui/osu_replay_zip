@@ -152,7 +152,7 @@ static bool decode_to_osr(const std::vector<u8>& raw_bytes, std::vector<u8>& fin
 
 	const std::vector<u8> compressed_string{ (flags & ORZ_FLAG::replay_verbatim) ?
 		stream_data[orz_tag::osr_replay_data] :
-		compress_osr_string(replay_text(R, flags, stream_data), (options & DECODE_OSU_STABLE_LZMA) != 0)
+		compress_osr_string(replay_text(R, flags, stream_data))
 	};
 
 	final_file_output.clear();

@@ -13,7 +13,6 @@
 #include <fstream>
 #include <new>
 #include <span>
-#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -87,8 +86,6 @@ enum ORZ_OPTION : u32 {
 
 	ENCODE_CHECK_ROUND_TRIP = 1 << 0,
 
-	DECODE_OSU_STABLE_LZMA = 1 << 1,
-
 	DECODE_SKIP_CRC = 1 << 2,
 
 	ENCODE_RELAX = 1 << 3,
@@ -108,11 +105,9 @@ enum class orz_tag : u8 {
 
 };
 
-#define _7Z_NO_METHOD_LZMA2
-
-#include "LzmaEnc.h"
+// replay data is decoded with the LZMA SDK's decoder (Lib), and encoded the way osu! encodes it (osu_lzma.h)
 #include "LzmaDec.h"
-#include "7zTypes.h"
+#include "osu_lzma.h"
 
 struct _lzma_block_cache {
 
@@ -776,53 +771,9 @@ inline bool decompress_osr_string(const u8* data, size_t size, std::string& out)
 	return true;
 }
 
-inline std::vector<u8> compress_osr_string(std::string_view string, bool stable) {
-
-	std::vector<u8> output(std::max<size_t>(1024, size_t(string.size() * 1.5) + 64));
-
-	CLzmaEncProps p;
-
-	LzmaEncProps_Init(&p);
-
-	if (stable) {
-
-		p.level = 5;
-		p.dictSize = 1u << 21;
-		p.lc = 3;
-		p.lp = 0;
-		p.pb = 2;
-		p.algo = 1;
-		p.fb = 255;
-		p.btMode = 1;
-		p.numHashBytes = 4;
-		p.mc = 16 + (255 >> 1);
-		p.writeEndMark = 0;
-		p.numThreads = 1;
-
-	} else {
-
-		p.level = 0;
-		p.dictSize = (u32)std::clamp<size_t>(string.size(), 1 << 12, 1 << 24);
-
-	}
-
-	const u64 size{ string.size() };
-
-	memcpy(output.data() + 5, &size, 8);
-
-	size_t len{ output.size() - (5 + 8) };
-	SizeT props_size{ 5 };
-
-	if (LzmaEncode(output.data() + 5 + 8, &len, (const u8*)string.data(), string.size(),
-		&p, output.data(), &props_size, p.writeEndMark,
-		0,
-		&lzma_allocFuncs, &lzma_allocFuncs
-	) != SZ_OK)
-		throw std::runtime_error("LZMA encode failed");
-
-	output.resize(len + 5 + 8);
-
-	return output;
+// the replay text as osu! stores it, so replay data the game wrote comes back byte for byte (osu_lzma.h)
+inline std::vector<u8> compress_osr_string(std::string_view string) {
+	return osu_lzma::compress({ (const u8*)string.data(), string.size() });
 }
 
 #include "orz_state.h"
