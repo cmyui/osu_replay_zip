@@ -68,7 +68,6 @@ struct _orz_construct {
 
 	std::vector<u8> file_data;
 
-	// streams are added in rising tag order
 	void add_stream(orz_tag tag, const void* src, size_t size) {
 
 		if (data_count == 255 || size == 0) [[unlikely]]
@@ -117,6 +116,9 @@ struct _orz_construct {
 
 		}
 
+		if (st.replay_data.present)
+			add_stream(orz_tag::osr_replay_data, st.replay_data.bytes.data(), st.replay_data.bytes.size());
+
 		if (st.life.present) {
 
 			const auto bytes{ life::encode(st.life.text, st.input) };
@@ -124,9 +126,6 @@ struct _orz_construct {
 			add_stream(orz_tag::life_bar, bytes.data(), bytes.size());
 
 		}
-
-		if (st.replay_data.present)
-			add_stream(orz_tag::osr_replay_data, st.replay_data.bytes.data(), st.replay_data.bytes.size());
 
 	}
 
@@ -142,25 +141,24 @@ struct _orz_construct {
 
 	void finish(const char* output_file) {
 
-		// the CRC continues over the stored .osr parts, in CRC_PART_TAGS order
-		u32 crc{ frames_crc };
-
-		for (const orz_tag tag : CRC_PART_TAGS) {
+		// a stream's bytes, empty when absent
+		const auto stream = [&](orz_tag tag) {
 
 			size_t offset{};
 
-			for (size_t i{}; i < data_count; offset += size_table[i++]) {
+			for (size_t i{}; i < data_count; offset += size_table[i++])
+				if (tag_table[i] == tag)
+					return std::span<const u8>{ file_data.data() + offset, size_table[i] };
 
-				if (tag_table[i] == tag) {
+			return std::span<const u8>{};
+		};
 
-					crc = crc32c_part(crc, file_data.data() + offset, size_table[i]);
+		// the CRC continues over the stored .osr parts, in CRC_PART_TAGS order
+		u32 crc{ frames_crc };
 
-					break;
-				}
-
-			}
-
-		}
+		for (const orz_tag tag : CRC_PART_TAGS)
+			if (const auto part{ stream(tag) }; part.size())
+				crc = crc32c_part(crc, part.data(), part.size());
 
 		const u32 crc_flags{ (u32)flags };
 
@@ -180,17 +178,21 @@ struct _orz_construct {
 			write_length_bucket<3, ORZ_SEED_LENGTH>(state->seed.value, h);
 
 		write_bucket(frame_count, h, 16);
-		write_bucket(data_count, h, 3);
 
-		// tags rise, so each is coded as its gap past the previous one
-		u32 next_tag{};
+		// the streams go in a fixed order, so the flags say which are there: with an .osr its parts and any life bar, then
+		// the replay (verbatim or frames), which runs to the end of the file
+		const auto parts{ stream(orz_tag::osr_parts) }, life{ stream(orz_tag::life_bar) };
+		const auto replay{ stream((flags & ORZ_FLAG::replay_verbatim) ? orz_tag::osr_replay_data : orz_tag::frames) };
 
-		for (size_t i{}; i < data_count; ++i) {
+		if (flags & ORZ_FLAG::has_osr_header) {
 
-			write_bucket((u32)tag_table[i] - next_tag, h, 1, 2);
-			write_bucket(size_table[i], h);
+			h.push_back(life.size() != 0);
 
-			next_tag = (u32)tag_table[i] + 1;
+			// parts in the fields form take 44 to 72 bytes
+			write_bucket((u32)parts.size(), h, 7);
+
+			if (life.size())
+				write_bucket((u32)life.size(), h);
 
 		}
 
@@ -201,7 +203,9 @@ struct _orz_construct {
 		final_file.push_back(ORZ_MAGIC);
 
 		add_to_u8(final_file, h.data);
-		add_to_u8(final_file, file_data);
+
+		for (const auto s : { parts, life, replay })
+			add_to_u8(final_file, s.data(), s.size());
 
 		if (strlen(output_file))
 			write_file(output_file, final_file);
