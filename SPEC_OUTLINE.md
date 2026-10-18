@@ -39,7 +39,7 @@ only has to print the same 7 significant digits.
 - **zigzag** maps signed to unsigned:
 
   ```math
-  \operatorname{zz}(v) = \begin{cases} 2v & v \ge 0 \\ -2v - 1 & v < 0 \end{cases}
+  \mathrm{zz}(v) = \begin{cases} 2v & v \ge 0 \\ -2v - 1 & v < 0 \end{cases}
   ```
 - **ULEB128**: the usual 7-bits-per-byte length used by `.osr` strings.
 - **Coded values** inside the arithmetic-coded body (§5) are binary decisions. "Raw" bits there are coded at
@@ -211,7 +211,7 @@ h ^= h >> 29;  h *= 0xBF58476D1CE4E5B9;  h ^= h >> 32
 $`i = \lfloor d / 128 \rfloor + 16`$ and $`r = d - 128 \lfloor d / 128 \rfloor`$:
 
 ```math
-\operatorname{squash}(d) =
+\mathrm{squash}(d) =
 \begin{cases}
 1 & d < -2047 \\
 4095 & d > 2047 \\
@@ -233,13 +233,13 @@ For one decision with counters $`p_i`$ (one per input), weight set $`w`$ and APM
 1. **Mix** the stretched counters (`dot` in 64-bit):
 
    ```math
-   x_i = \operatorname{stretch}\!\left(\left\lfloor \frac{p_i}{16} \right\rfloor\right), \qquad
-   p_m = \operatorname{squash}\!\left(\operatorname{clamp}\!\left(\left\lfloor \frac{\sum_i x_i w_i}{2^{16}} \right\rfloor,\ -2047,\ 2047\right)\right)
+   x_i = \mathrm{stretch}\!\left(\left\lfloor \frac{p_i}{16} \right\rfloor\right), \qquad
+   p_m = \mathrm{squash}\!\left(\mathrm{clamp}\!\left(\left\lfloor \frac{\sum_i x_i w_i}{2^{16}} \right\rfloor,\ -2047,\ 2047\right)\right)
    ```
 2. **Refine** with the APM, interpolating between two of its entries:
 
    ```math
-   s = \operatorname{stretch}(p_m) + 2048, \quad
+   s = \mathrm{stretch}(p_m) + 2048, \quad
    j = 33a + \left\lfloor \frac{s}{128} \right\rfloor, \quad
    t = s \bmod 128, \qquad
    p_a = \left\lfloor \frac{A[j]\,(128 - t) + A[j+1]\,t}{128} \right\rfloor
@@ -247,7 +247,7 @@ For one decision with counters $`p_i`$ (one per input), weight set $`w`$ and APM
 3. **Code** the bit with a quarter of the mixer and three quarters of the APM:
 
    ```math
-   p = \operatorname{clamp}\!\left(\left\lfloor \frac{16\,p_m + 3\,p_a}{4} \right\rfloor,\ 32,\ 65504\right)
+   p = \mathrm{clamp}\!\left(\left\lfloor \frac{16\,p_m + 3\,p_a}{4} \right\rfloor,\ 32,\ 65504\right)
    ```
 
 After coding `y`, in this order:
@@ -264,7 +264,7 @@ After coding `y`, in this order:
    A[j+1] \leftarrow A[j+1] + \left\lfloor \frac{5 \left\lfloor (\tau - A[j+1])\, t / 128 \right\rfloor}{256} \right\rfloor
    ```
 
-APM entries start at $`A[33c + k] = 16 \cdot \operatorname{squash}(128\,(k - 16))`$ for $`k = 0 \ldots 32`$.
+APM entries start at $`A[33c + k] = 16 \cdot \mathrm{squash}(128\,(k - 16))`$ for $`k = 0 \ldots 32`$.
 
 ### 5.5 Table sizes
 
@@ -341,7 +341,7 @@ change.
    wrapping as a signed 64-bit integer:
 
    ```math
-   \operatorname{value}(j) = \left\lfloor \frac{\text{step} \cdot j + \text{offset}}{2^{32}} \right\rfloor
+   \mathrm{value}(j) = \left\lfloor \frac{\text{step} \cdot j + \text{offset}}{2^{32}} \right\rfloor
    ```
 
    It maps the coded integers of a single rational or absolute segment onto the device's own lattice.
@@ -398,7 +398,7 @@ The models turn the coded integer `K` of each new position into a float:
 - The step `ΔK` is split into `m` reports over the frame's `dt` ms:
 
   ```math
-  m = \operatorname{clamp}\!\left(\operatorname{round}\!\left(\frac{dt \cdot \text{poll}}{1000}\right),\ 1,\ \min(|\Delta K|,\ 2^{16})\right)
+  m = \mathrm{clamp}\!\left(\mathrm{round}\!\left(\frac{dt \cdot \text{poll}}{1000}\right),\ 1,\ \min(|\Delta K|,\ 2^{16})\right)
   ```
 - The pixel position is advanced in double and rounded to float after each report, and clamped to the window.
 - Report splits and float rounding can leave several candidate floats. A slack index chooses one: first the
