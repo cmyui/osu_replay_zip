@@ -85,7 +85,7 @@ static int run(const int param_count, char** param) {
 
 		orz_state st{};
 
-		osr_to_orz(in_s.c_str(), out_s.c_str(), ORZ_FLAG::has_osr_header, st);
+		osr_to_orz(in_s.c_str(), out_s.c_str(), ORZ_ENCODE_INFO::has_osr_header, st);
 
 		if (st.output.empty()) {
 

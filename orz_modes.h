@@ -16,6 +16,11 @@ namespace modes {
 
 	enum kind : u32 { taiko, fruits, mania };
 
+	// the frames form of a kind kind_other_frames sends here
+	FORCEINLINE kind mode_of(orz_kind k) {
+		return k == orz_kind::mania ? mania : kind_mode(k) == 1 ? taiko : fruits;
+	}
+
 	// osu!mania x holds the held columns as bits, up to 18 (9K co-op)
 	constexpr int MAX_COLUMNS{ 18 };
 
@@ -533,17 +538,17 @@ namespace modes {
 		return p;
 	}
 
-	// osu!taiko, osu!catch or osu!mania, as the flags say
+	// osu!taiko, osu!catch or osu!mania, as the kind says
 	void encode(const char* output_file, const _osr& r, const u32 flags, orz_state& state) {
 
-		const kind mode{ (flags & ORZ_FLAG::gamemode_mania) ? mania : (flags & ORZ_FLAG::gamemode_taiko) ? taiko : fruits };
+		const kind mode{ mode_of(info_kind(flags)) };
 
 		// osu!mania keeps the held columns in x (keys stay 0), anything else goes to the osu!standard coder
 		if (mode == mania) {
 
 			for (const auto& f : r)
 				if (f.keys || !(f.x >= 0.f && f.x < (float)(1u << MAX_COLUMNS)) || f.x != std::floor(f.x))
-					return standard::encode(output_file, r, flags & ~u32(ORZ_FLAG::gamemode_mania), state);
+					return standard::encode(output_file, r, with_kind(flags, orz_kind::osu), state);
 
 		}
 
@@ -579,7 +584,7 @@ namespace modes {
 		_orz_construct result{ &state };
 
 		result.frame_count = (u32)r.size();
-		result.flags = flags | (mode == mania ? ORZ_FLAG::mania_columns : mode == taiko ? ORZ_FLAG::taiko_keys : ORZ_FLAG::fruits_catcher);
+		result.flags = flags;
 		result.frames_crc = _orz_construct::crc_of(r, state.seed);
 
 		result.add_stream(orz_tag::frames, head.data.data(), head.data.size());
@@ -596,11 +601,11 @@ namespace modes {
 		size_t bit{};
 		u32 grid{};
 
-		_side side{ (flags & ORZ_FLAG::mania_columns) ? mania : (flags & ORZ_FLAG::taiko_keys) ? taiko : fruits };
+		_side side{ mode_of(info_kind(flags)) };
 
 		side.table = frame_time::read_table(head, bit, grid);
 		side.grid = frame_time::_time_grid{ grid };
-		side.exact_text = (flags & ORZ_FLAG::text_shortest) != 0;
+		side.exact_text = (flags & ORZ_ENCODE_INFO::text_shortest) != 0;
 
 		cm::bit_decoder d{ std::span{ data }.subspan(std::min(data.size(), (bit + 7) / 8)) };
 

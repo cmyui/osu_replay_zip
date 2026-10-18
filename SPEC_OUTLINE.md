@@ -59,7 +59,7 @@ then       the streams, in the order of §3.2; the last runs to the end of the f
 | Field | Coding | Notes |
 |---|---|---|
 | version | `bucket(4, 8)` | 0. A reader rejects a larger version as "made by a newer version". |
-| flags | `bucket(7)` | §3.3 |
+| encode info | `bucket(7)` | §3.3 |
 | crc | 32 bits | §3.4 |
 | seeded | 1 bit | the replay ended with a closing seed frame (§3.5) |
 | seed | `length_bucket<3,18>`, if seeded | see below |
@@ -76,7 +76,7 @@ The replay stream has no size field: it takes every byte after the streams befor
 
 ### 3.2 Streams
 
-The streams always come in this order, and the flags say which are present:
+The streams always come in this order, and the encode info says which are present:
 
 | Stream | Present when |
 |---|---|
@@ -86,7 +86,7 @@ The streams always come in this order, and the flags say which are present:
 
 So exactly one of `frames` and `osr_replay_data` is present, and it is the last stream (the replay).
 
-### 3.3 Flags
+### 3.3 Encode info
 
 | Bits | Name | Meaning |
 |---|---|---|
@@ -99,13 +99,15 @@ So exactly one of `frames` and `osr_replay_data` is present, and it is the last 
 | Kind | Replay | Frames stream |
 |---|---|---|
 | 0 | osu! | osu!standard form (§6) |
-| 1 | osu! relax | osu!standard form, relax |
-| 2 | osu! autopilot | osu!standard form with the autopilot path model (§6.6) |
-| 3 | osu!taiko | osu!taiko form (§7) |
-| 4 | osu!taiko relax | osu!taiko form |
-| 5 | osu!catch | osu!catch form (§7) |
+| 1 | osu!taiko | osu!taiko form (§7) |
+| 2 | osu!catch | osu!catch form (§7) |
+| 3 | osu!mania | osu!mania form (§7) |
+| 4 | osu! relax | osu!standard form, relax |
+| 5 | osu!taiko relax | osu!taiko form |
 | 6 | osu!catch relax | osu!standard form, relax (the cursor drives the catcher) |
-| 7 | osu!mania | osu!mania form (§7) |
+| 7 | osu! autopilot | osu!standard form with the autopilot path model (§6.6) |
+
+Kinds 0 to 3 are the `.osr`'s game mode numbers.
 
 Relax does not exist in osu!mania, and autopilot only in osu!. Relax selects the relax prior sets (§5.6) and is only
 needed to decode the osu!standard form. The game mode is the `.osr`'s, or the one given with bare replay data, with
@@ -121,7 +123,7 @@ CRC-32C (Castagnoli polynomial), starting from `0xFFFFFFFF` with no final XOR, o
    (§1), not the parsed input.
 2. **`osr_parts` and `osr_replay_data`, in that order**, each when present and not empty: its `u32` size, then its
    bytes.
-3. **The flags**, as stored (§3.3), as a `u32`.
+3. **The encode info**, as stored (§3.3), as a `u32`.
 
 The CRC does not cover the magic, the header layout or the frames stream's own bytes, only what they decode to.
 
@@ -311,7 +313,7 @@ by the kind of replay:
 | Set | Replays |
 |---|---|
 | 0, 1, 2 | osu!standard whose device model (§6.3) is rational, mouse or absolute |
-| 3, 4, 5 | the same for relax replays (kinds 1 and 6) |
+| 3, 4, 5 | the same for relax replays (kinds 4 and 6) |
 | 6 | relax without a device model |
 | 7 | osu!standard without a device model (mostly autopilot) |
 | 8, 9, 10 | osu!taiko, osu!catch, osu!mania |
@@ -347,7 +349,7 @@ change.
      permutation of the 96 symbols, are normative data.
 2. **Time grid**: 3 bits choosing a period from `{50/3, 25, 25/2, 100/3, 20, none}` ms. It is only used as context.
 3. **Device model** for x, then for y: §6.3.
-4. **Autopilot**, for kind 2 only: the game speed (`small<2>`: 1.0, 1.5 or 0.75) and the screen width and height (§6.6).
+4. **Autopilot**, for kind 7 only: the game speed (`small<2>`: 1.0, 1.5 or 0.75) and the screen width and height (§6.6).
 5. **Native grid** for x, then y: 1 bit. If set, a 48-bit step and a 64-bit offset in 32.32 fixed point, with the sum
    wrapping as a signed 64-bit integer:
 
@@ -376,7 +378,7 @@ Two raw bits come first: whether axis x has escapes, then whether axis y does. T
    - Nothing is coded for frames 0 and 1 when `start_time` is set.
 3. **Repeat** (frames after the first): whether the position is bit-identical to the previous frame's.
 4. **For a new position** (not a repeat):
-   - an autopilot event, for kind 2 (§6.6);
+   - an autopilot event, for kind 7 (§6.6);
    - then **each axis**, in the order the move predictor expects to move more first:
      1. the move residual: the coded integer's step minus the predicted step;
      2. an escape decision, if the axis has escapes;
@@ -566,7 +568,7 @@ different choices with the same settings.
 
 A decoder only reads what the encoder chose. The format leaves these choices free:
 
-- the device model of each axis, its segments, the native grids and whether autopilot is on (kind 2);
+- the device model of each axis, its segments, the native grids and whether autopilot is on (kind 7);
 - the order of the delta table;
 - whether to use the compact forms of §8 and §9.
 

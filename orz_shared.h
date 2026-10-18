@@ -58,59 +58,48 @@ constexpr u32 ORZ_VERSION{ 0 };
 constexpr size_t ORZ_MAX_FRAMES{ 1u << 22 }; // (~19 hours at 60 fps)
 constexpr size_t ORZ_MAX_STREAM{ 1u << 28 };
 
-enum ORZ_FLAG {
+// what a replay is: the game mode, relax or autopilot (osu! only, frames coded with the autopilot path model), and so the
+// form of its frames. osu!catch relax is coded as osu!standard frames (the cursor drives the catcher), as are osu!mania
+// replays that do not fit the column form (stored as osu!). The first four are the .osr's game mode numbers.
+enum class orz_kind : u32 { osu, taiko, fruits, mania, osu_relax, taiko_relax, fruits_relax, osu_autopilot };
 
-	gamemode_std = 1 << 0,
-	gamemode_taiko = 1 << 1,
-	gamemode_fruits = 1 << 2,
-	gamemode_mania = 1 << 3,
+// the encode info as a file stores it: the kind in the low 3 bits, then a bit each
+enum ORZ_ENCODE_INFO : u32 {
 
-	has_osr_header = 1 << 4,
+	kind_bits = 7,
 
-	trailing_comma = 1 << 5,
+	has_osr_header = 1 << 3,
 
-	replay_verbatim = 1 << 6,
+	trailing_comma = 1 << 4,
 
-	text_shortest = 1 << 7, // floats are 'shortest round-trip' (newer .NET, osu!lazer)
+	replay_verbatim = 1 << 5,
 
-	// frames of the other modes (orz_modes.h), else osu!standard's (orz_frames.h)
-	mania_columns = 1 << 8, // osu!mania: held columns in x, scroll speed in y
-	taiko_keys = 1 << 9, // osu!taiko: positions from the keys
-	fruits_catcher = 1 << 10, // osu!catch: catcher positions against a movement prediction
-
-	relax = 1 << 11, // relax replay: osu!standard frame times use the replay's own delta table, relax priors
-
-	autopilot_path = 1 << 12, // osu!standard frames coded with the autopilot path model (orz_autopilot.h)
+	text_shortest = 1 << 6, // floats are 'shortest round-trip' (newer .NET, osu!lazer)
 
 };
 
-// what a replay is, as one number in the stored flags: the game mode, relax or autopilot (osu! only, frames coded with the
-// autopilot path model), and so the form of its frames. osu!catch relax is coded as osu!standard frames (the cursor
-// drives the catcher), as are osu!mania replays that do not fit the column form (stored as osu!)
-constexpr u32 FLAG_KINDS[]{
-	ORZ_FLAG::gamemode_std,
-	ORZ_FLAG::gamemode_std | ORZ_FLAG::relax,
-	ORZ_FLAG::gamemode_std | ORZ_FLAG::autopilot_path,
-	ORZ_FLAG::gamemode_taiko | ORZ_FLAG::taiko_keys,
-	ORZ_FLAG::gamemode_taiko | ORZ_FLAG::taiko_keys | ORZ_FLAG::relax,
-	ORZ_FLAG::gamemode_fruits | ORZ_FLAG::fruits_catcher,
-	ORZ_FLAG::gamemode_fruits | ORZ_FLAG::relax,
-	ORZ_FLAG::gamemode_mania | ORZ_FLAG::mania_columns,
-};
+constexpr u32 ORZ_ENCODE_INFO_BITS{ 7 };
 
-// the flags as a file stores them: the kind (FLAG_KINDS), then has_osr_header, trailing_comma, replay_verbatim and
-// text_shortest a bit each. The game modes are checked in the order the other modes' coder takes them.
-inline u32 pack_flags(u32 f) {
-
-	const u32 rx{ (f & ORZ_FLAG::relax) != 0 };
-	const u32 kind{ (f & ORZ_FLAG::gamemode_mania) ? 7 : (f & ORZ_FLAG::gamemode_taiko) ? 3 + rx : (f & ORZ_FLAG::gamemode_fruits) ? 5 + rx :
-		rx ? 1 : (f & ORZ_FLAG::autopilot_path) ? 2 : 0 };
-
-	return kind | ((f >> 4) & 15) << 3;
+FORCEINLINE orz_kind info_kind(u32 info) {
+	return (orz_kind)(info & ORZ_ENCODE_INFO::kind_bits);
 }
 
-inline u32 unpack_flags(u32 s) {
-	return FLAG_KINDS[s & 7] | ((s >> 3) & 15) << 4;
+FORCEINLINE u32 with_kind(u32 info, orz_kind k) {
+	return (info & ~u32(ORZ_ENCODE_INFO::kind_bits)) | (u32)k;
+}
+
+// the game mode, numbered as the .osr does (osu!, taiko, catch, mania)
+FORCEINLINE u32 kind_mode(orz_kind k) {
+	return k == orz_kind::osu_autopilot ? 0 : (u32)k & 3;
+}
+
+FORCEINLINE bool kind_relax(orz_kind k) {
+	return k >= orz_kind::osu_relax && k <= orz_kind::fruits_relax;
+}
+
+// frames of the other modes (orz_modes.h), else osu!standard's (orz_frames.h)
+FORCEINLINE bool kind_other_frames(orz_kind k) {
+	return k == orz_kind::taiko || k == orz_kind::fruits || k == orz_kind::mania || k == orz_kind::taiko_relax;
 }
 
 enum ORZ_OPTION : u32 {
@@ -654,7 +643,10 @@ inline _orz_container read_container(const std::vector<u8>& file) {
 		return c;
 	}
 
-	h.flags = unpack_flags(read_bucket(bs, i, 7));
+	h.flags = read_bucket(bs, i, ORZ_ENCODE_INFO_BITS);
+
+	if (h.flags >> ORZ_ENCODE_INFO_BITS)
+		return c;
 
 	for (int k{}; k < 32; ++k)
 		h.crc |= u32(small_read<1>(bs, i)) << k;
@@ -670,10 +662,10 @@ inline _orz_container read_container(const std::vector<u8>& file) {
 		return c;
 
 	// the streams in their fixed order (_orz_construct::finish)
-	if (h.flags & ORZ_FLAG::has_osr_header)
+	if (h.flags & ORZ_ENCODE_INFO::has_osr_header)
 		c.streams.push_back({ (u8)orz_tag::osr_parts, read_bucket(bs, i, 7) });
 
-	c.streams.push_back({ (u8)((h.flags & ORZ_FLAG::replay_verbatim) ? orz_tag::osr_replay_data : orz_tag::frames) });
+	c.streams.push_back({ (u8)((h.flags & ORZ_ENCODE_INFO::replay_verbatim) ? orz_tag::osr_replay_data : orz_tag::frames) });
 
 	c.header_bytes = 1 + (i + 7) / 8;
 

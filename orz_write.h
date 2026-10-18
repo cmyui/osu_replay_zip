@@ -153,14 +153,12 @@ struct _orz_construct {
 			if (const auto part{ stream(tag) }; part.size())
 				crc = crc32c_part(crc, part.data(), part.size());
 
-		const u32 stored_flags{ pack_flags(flags) };
-
-		crc = crc32c(crc, &stored_flags, sizeof(stored_flags));
+		crc = crc32c(crc, &flags, sizeof(flags));
 
 		bit_stream h{};
 
 		write_bucket(ORZ_VERSION, h, 4, 8);
-		write_bucket(stored_flags, h, 7);
+		write_bucket(flags, h, ORZ_ENCODE_INFO_BITS);
 
 		for (int k{}; k < 32; ++k)
 			h.push_back((crc >> k) & 1);
@@ -175,10 +173,10 @@ struct _orz_construct {
 		// the streams go in a fixed order, so the flags say which are there: with an .osr its parts (life bar included),
 		// then the replay (verbatim or frames), which runs to the end of the file
 		const auto parts{ stream(orz_tag::osr_parts) };
-		const auto replay{ stream((flags & ORZ_FLAG::replay_verbatim) ? orz_tag::osr_replay_data : orz_tag::frames) };
+		const auto replay{ stream((flags & ORZ_ENCODE_INFO::replay_verbatim) ? orz_tag::osr_replay_data : orz_tag::frames) };
 
 		// parts in the fields form take 44 to 72 bytes, and most with a life bar stay under 127
-		if (flags & ORZ_FLAG::has_osr_header)
+		if (flags & ORZ_ENCODE_INFO::has_osr_header)
 			write_bucket((u32)parts.size(), h, 7);
 
 		std::vector<u8> final_file{};
@@ -206,11 +204,13 @@ namespace modes { void encode(const char* output_file, const _osr& r, const u32 
 
 void encode_replay(const char* output_file, _osr& r, const u32 flags, orz_state& state, bool relax) {
 
+	const u32 mode{ kind_mode(info_kind(flags)) };
+
 	// osu!mania has no relax
-	const u32 f{ relax && !(flags & ORZ_FLAG::gamemode_mania) ? flags | ORZ_FLAG::relax : flags };
+	const u32 f{ relax && mode != 3 ? with_kind(flags, (orz_kind)((u32)orz_kind::osu_relax + mode)) : flags };
 
 	// CTB replays with relax map the catcher to the x of the cursor, encode the replay through the standard encoder to catch this
-	if ((flags & (ORZ_FLAG::gamemode_mania | ORZ_FLAG::gamemode_taiko)) || ((flags & ORZ_FLAG::gamemode_fruits) && !relax))
+	if (kind_other_frames(info_kind(f)))
 		return modes::encode(output_file, r, f, state);
 
 	standard::encode(output_file, r, f, state);
@@ -281,12 +281,12 @@ static void encode_osr(const std::vector<u8>& raw_file, const char* out_file, u3
 
 	auto& header_bytes{ state.osr_header };
 
-	if (flags & ORZ_FLAG::has_osr_header) {
+	if (flags & ORZ_ENCODE_INFO::has_osr_header) {
 
 		if (raw_file[0] > 3) // if the osr isnt for one of the main 4 game modes, abort
 			return;
 
-		flags |= 1u << raw_file[0];
+		flags = with_kind(flags, (orz_kind)raw_file[0]);
 
 		const bool ok {
 			skip(1) && skip(4) && // gamemode, game version
@@ -381,7 +381,7 @@ static void encode_osr(const std::vector<u8>& raw_file, const char* out_file, u3
 
 		_orz_construct result{ &state };
 
-		result.flags = flags | ORZ_FLAG::replay_verbatim;
+		result.flags = flags | ORZ_ENCODE_INFO::replay_verbatim;
 		result.frames_crc = _orz_construct::crc_of(state.input, {});
 		result.write(out_file);
 
@@ -414,7 +414,7 @@ static void encode_osr(const std::vector<u8>& raw_file, const char* out_file, u3
 
 		if (body.size() && body.back() == ',') {
 
-			text_flags |= ORZ_FLAG::trailing_comma;
+			text_flags |= ORZ_ENCODE_INFO::trailing_comma;
 			body.remove_suffix(1);
 
 		}
@@ -424,11 +424,11 @@ static void encode_osr(const std::vector<u8>& raw_file, const char* out_file, u3
 			state.exact_text = true;
 
 			if (orz_text::frames_text(replay_stream, state.exact_text) == body)
-				text_flags |= ORZ_FLAG::text_shortest;
+				text_flags |= ORZ_ENCODE_INFO::text_shortest;
 			else {
 
 				state.exact_text = false;
-				text_flags |= ORZ_FLAG::replay_verbatim;
+				text_flags |= ORZ_ENCODE_INFO::replay_verbatim;
 
 			}
 
@@ -438,15 +438,15 @@ static void encode_osr(const std::vector<u8>& raw_file, const char* out_file, u3
 
 	{
 
-		const float x_limit{ (flags & ORZ_FLAG::gamemode_mania) ? 16777216.f : 131072.f };
+		const float x_limit{ info_kind(flags) == orz_kind::mania ? 16777216.f : 131072.f };
 
 		for (const auto& f : replay_stream)
 			if (!(std::abs(f.x) <= x_limit) || !(std::abs(f.y) <= 131072.f)) // catches NaN too
-				text_flags |= ORZ_FLAG::replay_verbatim;
+				text_flags |= ORZ_ENCODE_INFO::replay_verbatim;
 
 	}
 
-	if (text_flags & ORZ_FLAG::replay_verbatim) {
+	if (text_flags & ORZ_ENCODE_INFO::replay_verbatim) {
 
 		write_verbatim();
 

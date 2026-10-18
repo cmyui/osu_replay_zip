@@ -67,16 +67,16 @@ namespace {
 
 		const auto c{ read_container(orz) };
 
-		if (!c.valid || (c.header.flags & ORZ_FLAG::replay_verbatim))
+		if (!c.valid || (c.header.flags & ORZ_ENCODE_INFO::replay_verbatim))
 			return false;
 
 		const u32 flags{ c.header.flags };
 
 		r.frames = c.header.frame_count;
 
-		if (flags & (ORZ_FLAG::mania_columns | ORZ_FLAG::taiko_keys | ORZ_FLAG::fruits_catcher)) {
+		if (kind_other_frames(info_kind(flags))) {
 
-			const modes::kind mode{ (flags & ORZ_FLAG::mania_columns) ? modes::mania : (flags & ORZ_FLAG::taiko_keys) ? modes::taiko : modes::fruits };
+			const modes::kind mode{ modes::mode_of(info_kind(flags)) };
 
 			_decoded_orz d;
 
@@ -85,7 +85,7 @@ namespace {
 
 			// without the closing seed frame
 			r.R.assign(d.frames.begin(), d.frames.begin() + r.frames);
-			r.prepared = modes::prepare(r.R, mode, (flags & ORZ_FLAG::text_shortest) != 0);
+			r.prepared = modes::prepare(r.R, mode, (flags & ORZ_ENCODE_INFO::text_shortest) != 0);
 
 			return true;
 		}
@@ -104,12 +104,12 @@ namespace {
 		bool start{}, start_time{};
 		std::span<const u8> rest;
 
-		if (!standard::read_head(data, r.side.table, grid, r.info, (flags & ORZ_FLAG::autopilot_path) != 0, r.side.ap, grid_of, start, start_time, rest))
+		if (!standard::read_head(data, r.side.table, grid, r.info, info_kind(flags) == orz_kind::osu_autopilot, r.side.ap, grid_of, start, start_time, rest))
 			return false;
 
 		r.side.axis = r.info.axis;
 		r.side.grid = frame_time::_time_grid{ grid };
-		r.side.relax = (flags & ORZ_FLAG::relax) != 0;
+		r.side.relax = kind_relax(info_kind(flags));
 		r.side.start_time = start_time;
 
 		if (frames::prior_set(r.side) != set)
@@ -596,7 +596,7 @@ namespace {
 		return out;
 	}
 
-	// mode flags for a replay file: .osr carries them, headerless data names them
+	// encode info for a replay file: .osr carries the mode, headerless data names it
 	u32 flags_of(const std::string& path) {
 
 		constexpr const char* NAMES[]{ "replay-osu-", "replay-taiko-", "replay-fruits-", "replay-mania-" };
@@ -605,9 +605,9 @@ namespace {
 
 		for (u32 m{}; m < 4; ++m)
 			if (name.starts_with(NAMES[m]))
-				return 1u << m;
+				return m;
 
-		return ORZ_FLAG::has_osr_header;
+		return ORZ_ENCODE_INFO::has_osr_header;
 	}
 
 	template<typename T>

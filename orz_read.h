@@ -63,7 +63,7 @@ static bool decode_frames(const std::vector<u8>& raw_bytes, const u32 options, _
 
 	std::vector<_osr_frame> R(header->frame_count);
 
-	const bool other_mode{ (header->flags & (ORZ_FLAG::mania_columns | ORZ_FLAG::taiko_keys | ORZ_FLAG::fruits_catcher)) != 0 };
+	const bool other_mode{ kind_other_frames(info_kind(header->flags)) };
 
 	if (!(other_mode ? modes::decode(header, stream_data, R) : standard::decode(header, stream_data, R)))
 		return false;
@@ -72,7 +72,7 @@ static bool decode_frames(const std::vector<u8>& raw_bytes, const u32 options, _
 	if (header->seeded)
 		R.push_back({ -12345, 0.f, 0.f, header->seed });
 
-	if (header->flags & ORZ_FLAG::replay_verbatim) {
+	if (header->flags & ORZ_ENCODE_INFO::replay_verbatim) {
 
 		const auto& data{ stream_data[orz_tag::osr_replay_data] };
 
@@ -93,9 +93,7 @@ static bool decode_frames(const std::vector<u8>& raw_bytes, const u32 options, _
 			if (const auto& part{ stream_data[tag] }; part.size())
 				crc = crc32c_part(crc, part.data(), part.size());
 
-		const u32 crc_flags{ pack_flags(header->flags) };
-
-		crc = crc32c(crc, &crc_flags, sizeof(crc_flags));
+		crc = crc32c(crc, &header->flags, sizeof(header->flags));
 
 		if (crc != header->crc)
 			return false;
@@ -120,7 +118,7 @@ bool orz_decode_frames(const std::vector<u8>& raw_bytes, _decoded_orz& out, cons
 
 std::string replay_text(const std::vector<_osr_frame>& R, u32 flags, const _stream_map& stream_data) {
 
-	if (flags & ORZ_FLAG::replay_verbatim) {
+	if (flags & ORZ_ENCODE_INFO::replay_verbatim) {
 
 		const auto& data{ stream_data[orz_tag::osr_replay_data] };
 
@@ -131,9 +129,9 @@ std::string replay_text(const std::vector<_osr_frame>& R, u32 flags, const _stre
 		return text;
 	}
 
-	std::string text{ orz_text::frames_text(R, (flags & ORZ_FLAG::text_shortest) != 0) };
+	std::string text{ orz_text::frames_text(R, (flags & ORZ_ENCODE_INFO::text_shortest) != 0) };
 
-	if (flags & ORZ_FLAG::trailing_comma)
+	if (flags & ORZ_ENCODE_INFO::trailing_comma)
 		text += ',';
 
 	return text;
@@ -150,14 +148,14 @@ static bool decode_to_osr(const std::vector<u8>& raw_bytes, std::vector<u8>& fin
 
 	const auto parts{ osr_parts::decode(stream_data[orz_tag::osr_parts]) };
 
-	const std::vector<u8> compressed_string{ (flags & ORZ_FLAG::replay_verbatim) ?
+	const std::vector<u8> compressed_string{ (flags & ORZ_ENCODE_INFO::replay_verbatim) ?
 		stream_data[orz_tag::osr_replay_data] :
 		compress_osr_string(replay_text(R, flags, stream_data))
 	};
 
 	final_file_output.clear();
 
-	if (flags & ORZ_FLAG::has_osr_header) {
+	if (flags & ORZ_ENCODE_INFO::has_osr_header) {
 
 		// header chunk, life graph, chunk up to the replay data length
 

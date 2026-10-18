@@ -101,7 +101,7 @@ namespace standard {
 		for (size_t i{}; i < r.size(); ++i)
 			sh.keys[i] = r[i].keys ^ ((r[i].keys >> 2) & 3);
 
-		sh.relax = (flags & ORZ_FLAG::relax) != 0;
+		sh.relax = kind_relax(info_kind(flags));
 
 		sh.osr.add_osr_parts();
 
@@ -853,7 +853,7 @@ namespace standard {
 		_orz_construct result{ shared.time };
 
 		if (p.autopilot)
-			result.flags |= ORZ_FLAG::autopilot_path;
+			result.flags = with_kind(result.flags, orz_kind::osu_autopilot);
 
 		const _osr& r{ *shared.frames };
 
@@ -1075,7 +1075,7 @@ namespace standard {
 
 		const _shared_streams shared{ shared_streams(r, flags, state, start, start_time) };
 
-		state.catcher = (flags & ORZ_FLAG::gamemode_fruits) != 0;
+		state.catcher = kind_mode(info_kind(flags)) == 2;
 
 		const std::vector<int> dt{ repeat::sample_dt(shared.delta, shared.repeated) };
 
@@ -1203,13 +1203,13 @@ namespace standard {
 
 		_native_grid grid_of[2]{};
 
-		if (!read_head(stream_data[orz_tag::frames], side.table, grid, info, (header->flags & ORZ_FLAG::autopilot_path) != 0, side.ap, grid_of, start,
+		if (!read_head(stream_data[orz_tag::frames], side.table, grid, info, info_kind(header->flags) == orz_kind::osu_autopilot, side.ap, grid_of, start,
 			start_time, rest))
 			return R.empty();
 
 		side.axis = info.axis;
 		side.grid = frame_time::_time_grid{ grid };
-		side.relax = (header->flags & ORZ_FLAG::relax) != 0;
+		side.relax = kind_relax(info_kind(header->flags));
 		side.start_time = start_time;
 
 		frames::_frame_data fd{};
@@ -1223,7 +1223,7 @@ namespace standard {
 				for (auto& k : fd.K[a])
 					k = grid_value(grid_of[a], k);
 
-		const bool exact_text{ (header->flags & ORZ_FLAG::text_shortest) != 0 };
+		const bool exact_text{ (header->flags & ORZ_ENCODE_INFO::text_shortest) != 0 };
 
 		std::vector<float> out;
 
