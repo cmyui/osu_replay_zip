@@ -538,19 +538,20 @@ namespace modes {
 		return p;
 	}
 
-	// osu!taiko, osu!catch or osu!mania, as the kind says
+	// osu!mania frames keep the held columns in x, and keys stay 0
+	bool fits_columns(const _osr& r) {
+
+		for (const auto& f : r)
+			if (f.keys || !(f.x >= 0.f && f.x < (float)(1u << MAX_COLUMNS)) || f.x != std::floor(f.x))
+				return false;
+
+		return true;
+	}
+
+	// osu!taiko, osu!catch or osu!mania (fits_columns), as the kind says
 	void encode(const char* output_file, const _osr& r, const u32 flags, orz_state& state) {
 
 		const kind mode{ mode_of(info_kind(flags)) };
-
-		// osu!mania keeps the held columns in x (keys stay 0), anything else goes to the osu!standard coder
-		if (mode == mania) {
-
-			for (const auto& f : r)
-				if (f.keys || !(f.x >= 0.f && f.x < (float)(1u << MAX_COLUMNS)) || f.x != std::floor(f.x))
-					return standard::encode(output_file, r, with_kind(flags, orz_kind::osu), state);
-
-		}
 
 		_osr R{ r };
 

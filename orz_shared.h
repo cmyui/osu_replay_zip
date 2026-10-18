@@ -59,8 +59,8 @@ constexpr size_t ORZ_MAX_FRAMES{ 1u << 22 }; // (~19 hours at 60 fps)
 constexpr size_t ORZ_MAX_STREAM{ 1u << 28 };
 
 // what a replay is: the game mode, relax or autopilot (osu! only, frames coded with the autopilot path model), and so the
-// form of its frames. osu!catch relax is coded as osu!standard frames (the cursor drives the catcher), as are osu!mania
-// replays that do not fit the column form (stored as osu!). The first four are the .osr's game mode numbers.
+// form of its frames. osu!catch relax is coded as osu!standard frames (the cursor drives the catcher). The first four are
+// the .osr's game mode numbers.
 enum class orz_kind : u32 { osu, taiko, fruits, mania, osu_relax, taiko_relax, fruits_relax, osu_autopilot };
 
 // the encode info as a file stores it: the kind in the low 3 bits, then a bit each

@@ -200,7 +200,10 @@ struct _orz_construct {
 };
 
 namespace standard { void encode(const char* output_file, const _osr& r, const u32 flags, orz_state& state); }
-namespace modes { void encode(const char* output_file, const _osr& r, const u32 flags, orz_state& state); }
+namespace modes {
+	void encode(const char* output_file, const _osr& r, const u32 flags, orz_state& state);
+	bool fits_columns(const _osr& r);
+}
 
 void encode_replay(const char* output_file, _osr& r, const u32 flags, orz_state& state, bool relax) {
 
@@ -436,15 +439,12 @@ static void encode_osr(const std::vector<u8>& raw_file, const char* out_file, u3
 
 	}
 
-	{
+	// osu!mania x is held to the column form below instead
+	const bool mania{ info_kind(flags) == orz_kind::mania };
 
-		const float x_limit{ info_kind(flags) == orz_kind::mania ? 16777216.f : 131072.f };
-
-		for (const auto& f : replay_stream)
-			if (!(std::abs(f.x) <= x_limit) || !(std::abs(f.y) <= 131072.f)) // catches NaN too
-				text_flags |= ORZ_ENCODE_INFO::replay_verbatim;
-
-	}
+	for (const auto& f : replay_stream)
+		if (!(mania || std::abs(f.x) <= 131072.f) || !(std::abs(f.y) <= 131072.f)) // catches NaN too
+			text_flags |= ORZ_ENCODE_INFO::replay_verbatim;
 
 	if (text_flags & ORZ_ENCODE_INFO::replay_verbatim) {
 
@@ -468,10 +468,18 @@ static void encode_osr(const std::vector<u8>& raw_file, const char* out_file, u3
 
 	}
 
+	// the osu!mania form only holds columns
+	if (mania && !modes::fits_columns(replay_stream)) {
+
+		write_verbatim();
+
+		return;
+	}
+
 	encode_replay(out_file, replay_stream, flags | text_flags, state, relax);
 
 	if ((state.options & ENCODE_CHECK_ROUND_TRIP) && !orz_round_trip_ok(state.output, state.text))
-		write_verbatim();
+		write_verbatim(); // overwrites result of encode_replay
 
 }
 

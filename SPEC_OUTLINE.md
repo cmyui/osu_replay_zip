@@ -111,8 +111,8 @@ Kinds 0 to 3 are the `.osr`'s game mode numbers.
 
 Relax does not exist in osu!mania, and autopilot only in osu!. Relax selects the relax prior sets (§5.6) and is only
 needed to decode the osu!standard form. The game mode is the `.osr`'s, or the one given with bare replay data, with
-osu! when none is given; it is not needed to decode. osu!mania replays that do not fit the column form are stored as
-kind 0, and so are autopilot replays the path model does not fit (the encoder decides from the frames).
+osu! when none is given; it is not needed to decode. Autopilot replays the path model does not fit are stored as kind 0
+(the encoder decides from the frames).
 
 ### 3.4 CRC
 
@@ -160,7 +160,9 @@ An encoder must store the replay verbatim (§10) instead of as frames when any o
 - the replay data does not decompress to its declared size;
 - neither float style reprints the text exactly;
 - there are more than 2^22 frames;
-- some `|x|` or `|y|` exceeds 2^17 (x may reach 2^24 in osu!mania), or a value is NaN.
+- some `|y|` exceeds 2^17, or some `|x|` outside osu!mania, or a value is NaN;
+- an osu!mania frame other than the closing seed frame does not fit the column form (§7): its keys are not 0, or its
+  x is not an integer from 0 to 2^18 − 1.
 
 ## 5. The binary coder
 
