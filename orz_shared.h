@@ -96,8 +96,7 @@ enum class orz_tag : u8 {
 	// delta table and the mode's model, then the context mixed frames: orz_frames.h (osu!standard), orz_modes.h (other modes)
 	frames = 0,
 
-	osr_parts, // the .osr bytes around the replay data: the header, what follows the life bar, what follows the replay data (orz_parts.h)
-	life_bar,
+	osr_parts, // the .osr bytes around the replay data: the header, the life bar, what follows it, what follows the replay data (orz_parts.h)
 	osr_replay_data,
 
 };
@@ -638,16 +637,8 @@ inline _orz_container read_container(const std::vector<u8>& file) {
 		return c;
 
 	// the streams in their fixed order (_orz_construct::finish)
-	if (h.flags & ORZ_FLAG::has_osr_header) {
-
-		const bool life{ small_read<1>(bs, i) != 0 };
-
+	if (h.flags & ORZ_FLAG::has_osr_header)
 		c.streams.push_back({ (u8)orz_tag::osr_parts, read_bucket(bs, i, 7) });
-
-		if (life)
-			c.streams.push_back({ (u8)orz_tag::life_bar, read_bucket(bs, i) });
-
-	}
 
 	c.streams.push_back({ (u8)((h.flags & ORZ_FLAG::replay_verbatim) ? orz_tag::osr_replay_data : orz_tag::frames) });
 
@@ -737,7 +728,6 @@ FORCEINLINE u32 crc32c_frame(u32 crc, const _osr_frame& f) {
 
 constexpr orz_tag CRC_PART_TAGS[]{
 	orz_tag::osr_parts,
-	orz_tag::life_bar,
 	orz_tag::osr_replay_data
 };
 

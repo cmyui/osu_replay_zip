@@ -3,6 +3,7 @@
 // the .osr bytes around the replay data: the header (mode .. mods), the time stamp after the life bar and what follows
 // the replay data (online score id, extra data). Stored modelled when they have the usual shape: md5 strings as 16 bytes,
 // a replay md5 that a known formula gives back as that formula's index, numbers in buckets. Anything else stays raw.
+// The coded life bar (orz_life.h) follows them, to the end of the stream.
 
 #include <array>
 #include <bit>
@@ -30,6 +31,7 @@ namespace osr_parts {
 
 	struct _parts {
 		std::vector<u8> header, after_life, tail;
+		std::vector<u8> life; // coded, empty when the .osr has none
 	};
 
 	inline std::array<u8, 16> md5(std::string_view s) {
@@ -458,7 +460,7 @@ namespace osr_parts {
 		return out;
 	}
 
-	inline _parts decode_fields(const _bit_view s) {
+	inline _parts decode_fields(const _bit_view s, size_t& used) {
 
 		_parts p{};
 		_fields f{};
@@ -528,6 +530,8 @@ namespace osr_parts {
 
 		p.tail.insert(p.tail.end(), rest.begin(), rest.end());
 
+		used = (at + 7) / 8;
+
 		return p;
 	}
 
@@ -546,7 +550,7 @@ namespace osr_parts {
 		return out;
 	}
 
-	inline _parts decode_raw(std::span<const u8> data) {
+	inline _parts decode_raw(std::span<const u8> data, size_t& used) {
 
 		_parts p{};
 
@@ -573,6 +577,8 @@ namespace osr_parts {
 
 		}
 
+		used = at;
+
 		return p;
 	}
 
@@ -582,24 +588,36 @@ namespace osr_parts {
 		if (data.empty())
 			return {};
 
-		return data[0] == format_fields ? decode_fields(_bit_view{ data.subspan(1) }) : decode_raw(data.subspan(1));
+		size_t used{};
+
+		auto p{ data[0] == format_fields ? decode_fields(_bit_view{ data.subspan(1) }, used) : decode_raw(data.subspan(1), used) };
+
+		if (1 + used < data.size())
+			p.life.assign(data.begin() + 1 + used, data.end());
+
+		return p;
 	}
 
 	inline std::vector<u8> encode(const _parts& p) {
 
 		auto out{ encode_fields(p) };
 
-		// only kept when it gives back these exact bytes
+		// only kept when it gives back these exact bytes and ends where they do
 		if (!out.empty()) {
 
 			const auto back{ decode(out) };
 
-			if (back.header == p.header && back.after_life == p.after_life && back.tail == p.tail)
-				return out;
+			if (!(back.header == p.header && back.after_life == p.after_life && back.tail == p.tail && back.life.empty()))
+				out.clear();
 
 		}
 
-		return encode_raw(p);
+		if (out.empty())
+			out = encode_raw(p);
+
+		out.insert(out.end(), p.life.begin(), p.life.end());
+
+		return out;
 	}
 
 }

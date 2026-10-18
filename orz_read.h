@@ -165,9 +165,9 @@ static bool decode_to_osr(const char* input_file, const char* output_file, const
 
 		add_to_u8(final_file_output, parts.header);
 
-		if (const auto& life_raw{ stream_data[orz_tag::life_bar] }; life_raw.size()) {
+		if (parts.life.size()) {
 
-			const std::string text{ life::decode(life_raw, R) };
+			const std::string text{ life::decode(parts.life, R) };
 
 			final_file_output.push_back(0x0b);
 
