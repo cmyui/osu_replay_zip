@@ -139,9 +139,7 @@ std::string replay_text(const std::vector<_osr_frame>& R, u32 flags, const _stre
 	return text;
 }
 
-static bool decode_to_osr(const char* input_file, const char* output_file, const u32 options) {
-
-	const auto raw_bytes{ read_file(input_file) };
+static bool decode_to_osr(const std::vector<u8>& raw_bytes, std::vector<u8>& final_file_output, const u32 options) {
 
 	_decoded_orz decoded;
 
@@ -157,7 +155,7 @@ static bool decode_to_osr(const char* input_file, const char* output_file, const
 		compress_osr_string(replay_text(R, flags, stream_data), (options & DECODE_OSU_STABLE_LZMA) != 0)
 	};
 
-	std::vector<u8> final_file_output{};
+	final_file_output.clear();
 
 	if (flags & ORZ_FLAG::has_osr_header) {
 
@@ -189,13 +187,25 @@ static bool decode_to_osr(const char* input_file, const char* output_file, const
 	// bytes after the replay data (online score id, extra data), verbatim
 	add_to_u8(final_file_output, parts.tail);
 
-	return write_file(output_file, final_file_output);
+	return true;
+}
+
+// an .orz in memory: the .osr (or bare replay data) goes to out
+bool orz_to_osr(const std::vector<u8>& orz, std::vector<u8>& out, const u32 options = 0) {
+
+	try {
+		return decode_to_osr(orz, out, options);
+	} catch (const std::exception&) {
+		return false;
+	}
+
 }
 
 bool orz_to_osr(const char* input_file, const char* output_file, const u32 options = 0) {
 
 	try {
-		return decode_to_osr(input_file, output_file, options);
+		std::vector<u8> out;
+		return decode_to_osr(read_file(input_file), out, options) && write_file(output_file, out);
 	} catch (const std::exception&) {
 		return false;
 	}

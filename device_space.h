@@ -1389,7 +1389,7 @@ namespace dspace {
 					break;
 			}
 
-			return round_div(moved * ms(dt), std::max(span, 1ll));
+			return round_div(moved * ms(dt), std::max<i64>(span, 1));
 		}
 
 		i64 pred(int a, int dt) const {

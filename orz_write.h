@@ -215,7 +215,7 @@ void encode_replay(const char* output_file, _osr& r, const u32 flags, orz_state&
 
 bool orz_round_trip_ok(const std::vector<u8>& orz, const std::string& want);
 
-static void encode_osr(const char* in_file, const char* out_file, u32 flags, orz_state& state) {
+static void encode_osr(const std::vector<u8>& raw_file, const char* out_file, u32 flags, orz_state& state) {
 
 	{
 
@@ -227,8 +227,6 @@ static void encode_osr(const char* in_file, const char* out_file, u32 flags, orz
 		state = std::move(fresh);
 
 	}
-
-	const auto raw_file{ read_file(in_file) };
 
 	if (raw_file.size() < 128)
 		return;
@@ -474,12 +472,23 @@ static void encode_osr(const char* in_file, const char* out_file, u32 flags, orz
 
 }
 
+// an .osr (or bare replay data) in memory: the .orz goes to state.output
+void osr_to_orz(const std::vector<u8>& input, const u32 flags, orz_state& state) {
+
+	try {
+		encode_osr(input, "", flags, state);
+	} catch (const std::exception&) {
+		state.output.clear(); // nothing is written for input the encoder can not handle
+	}
+
+}
+
 void osr_to_orz(const char* in_file, const char* out_file, const u32 flags, orz_state& state) {
 
 	try {
-		encode_osr(in_file, out_file, flags, state);
+		encode_osr(read_file(in_file), out_file, flags, state);
 	} catch (const std::exception&) {
-		state.output.clear(); // nothing is written for input the encoder can not handle
+		state.output.clear();
 	}
 
 }
