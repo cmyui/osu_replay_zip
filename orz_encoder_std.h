@@ -626,10 +626,8 @@ namespace standard {
 		return g.A != 0;
 	}
 
-	// autopilot parameters, after the device model in the head of the frames stream
+	// autopilot parameters, after the device model in the head of the frames stream; whether there are any is a flag
 	inline void write_autopilot(const autopilot::_params& ap, bit_stream& o) {
-
-		o.push_back(ap.on);
 
 		if (!ap.on)
 			return;
@@ -640,10 +638,9 @@ namespace standard {
 
 	}
 
-	inline bool read_autopilot(const _bit_view in, size_t& i, autopilot::_params& ap) {
+	inline bool read_autopilot(const _bit_view in, size_t& i, autopilot::_params& ap, bool on) {
 
-		ap = {};
-		ap.on = small_read<1>(in, i) != 0;
+		ap = { on };
 
 		if (!ap.on)
 			return true;
@@ -739,6 +736,7 @@ namespace standard {
 
 		_orz_construct streams;
 		std::array<dspace::axis_streams, 2> st;
+		bool autopilot{}; // coded with the autopilot path model
 
 		size_t size() const {
 			return streams.file_data.size();
@@ -750,6 +748,8 @@ namespace standard {
 		const _shared_streams& shared, orz_state& state, const autopilot::_params& ap = {}, const std::vector<autopilot::event>& moves = {}) {
 
 		_positions p{ { &state } };
+
+		p.autopilot = ap.on;
 
 		for (int a{}; a < 2; ++a)
 			p.st[a] = dspace::encode_axis_model(m.axis[a], vals[a], dt, state.exact_text);
@@ -852,9 +852,12 @@ namespace standard {
 
 		_orz_construct result{ shared.time };
 
+		if (p.autopilot)
+			result.flags |= ORZ_FLAG::autopilot_path;
+
 		const _osr& r{ *shared.frames };
 
-		u32 crc{};
+		u32 crc{ ORZ_CRC_SEED };
 
 		for (size_t i{}; i < r.size(); ++i) {
 
@@ -1091,10 +1094,11 @@ namespace standard {
 		dspace::_model_info info{ all_text() };
 		_positions best{ { &state } };
 
-		// autopilot: clearly autopilot replays skip the device models, others that have none try it against text
+		// autopilot: clearly autopilot replays skip the device models, others that have none try it against text. Relax
+		// and autopilot do not go together.
 		const auto ap_samples{ autopilot_samples(r, shared, state.exact_text) };
 
-		if (const auto ap{ autopilot::detect(ap_samples, AUTOPILOT_WINDOWS, std::size(AUTOPILOT_WINDOWS)) }; ap.on)
+		if (const auto ap{ shared.relax ? autopilot::_params{} : autopilot::detect(ap_samples, AUTOPILOT_WINDOWS, std::size(AUTOPILOT_WINDOWS)) }; ap.on)
 			best = autopilot_streams(ap_samples, ap, vals, dt, shared, state);
 		else {
 
@@ -1126,7 +1130,7 @@ namespace standard {
 
 			if (text_only(0) && text_only(1)) {
 
-				if (const auto search{ search_autopilot(ap_samples) }; search.on) {
+				if (const auto search{ shared.relax ? autopilot::_params{} : search_autopilot(ap_samples) }; search.on) {
 
 					auto moves{ autopilot_streams(ap_samples, search, vals, dt, shared, state) };
 
@@ -1162,8 +1166,9 @@ namespace standard {
 
 	}
 	
-	// the head of the frames stream: delta table, time grid, device model, autopilot and tablet grids; rest: what follows from the next byte
-	inline bool read_head(std::span<const u8> data, std::vector<int>& table, u32& grid, dspace::_model_info& info,
+	// the head of the frames stream: delta table, time grid, device model, autopilot and tablet grids; rest: what follows from the next byte.
+	// autopilot: the flag, whether autopilot parameters follow
+	inline bool read_head(std::span<const u8> data, std::vector<int>& table, u32& grid, dspace::_model_info& info, bool autopilot,
 		autopilot::_params& ap, _native_grid (&grid_of)[2], bool& start, bool& start_time, std::span<const u8>& rest) {
 
 		const _bit_view head{ data };
@@ -1172,7 +1177,7 @@ namespace standard {
 
 		table = frame_time::read_table(head, bit, grid);
 
-		if (!dspace::read_info(head, bit, info) || !read_autopilot(head, bit, ap))
+		if (!dspace::read_info(head, bit, info) || !read_autopilot(head, bit, ap, autopilot))
 			return false;
 
 		for (int a{}; a < 2; ++a)
@@ -1198,7 +1203,8 @@ namespace standard {
 
 		_native_grid grid_of[2]{};
 
-		if (!read_head(stream_data[orz_tag::frames], side.table, grid, info, side.ap, grid_of, start, start_time, rest))
+		if (!read_head(stream_data[orz_tag::frames], side.table, grid, info, (header->flags & ORZ_FLAG::autopilot_path) != 0, side.ap, grid_of, start,
+			start_time, rest))
 			return R.empty();
 
 		side.axis = info.axis;

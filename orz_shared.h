@@ -80,7 +80,38 @@ enum ORZ_FLAG {
 
 	relax = 1 << 11, // relax replay: osu!standard frame times use the replay's own delta table, relax priors
 
+	autopilot_path = 1 << 12, // osu!standard frames coded with the autopilot path model (orz_autopilot.h)
+
 };
+
+// what a replay is, as one number in the stored flags: the game mode, relax or autopilot (osu! only, frames coded with the
+// autopilot path model), and so the form of its frames. osu!catch relax is coded as osu!standard frames (the cursor
+// drives the catcher), as are osu!mania replays that do not fit the column form (stored as osu!)
+constexpr u32 FLAG_KINDS[]{
+	ORZ_FLAG::gamemode_std,
+	ORZ_FLAG::gamemode_std | ORZ_FLAG::relax,
+	ORZ_FLAG::gamemode_std | ORZ_FLAG::autopilot_path,
+	ORZ_FLAG::gamemode_taiko | ORZ_FLAG::taiko_keys,
+	ORZ_FLAG::gamemode_taiko | ORZ_FLAG::taiko_keys | ORZ_FLAG::relax,
+	ORZ_FLAG::gamemode_fruits | ORZ_FLAG::fruits_catcher,
+	ORZ_FLAG::gamemode_fruits | ORZ_FLAG::relax,
+	ORZ_FLAG::gamemode_mania | ORZ_FLAG::mania_columns,
+};
+
+// the flags as a file stores them: the kind (FLAG_KINDS), then has_osr_header, trailing_comma, replay_verbatim and
+// text_shortest a bit each. The game modes are checked in the order the other modes' coder takes them.
+inline u32 pack_flags(u32 f) {
+
+	const u32 rx{ (f & ORZ_FLAG::relax) != 0 };
+	const u32 kind{ (f & ORZ_FLAG::gamemode_mania) ? 7 : (f & ORZ_FLAG::gamemode_taiko) ? 3 + rx : (f & ORZ_FLAG::gamemode_fruits) ? 5 + rx :
+		rx ? 1 : (f & ORZ_FLAG::autopilot_path) ? 2 : 0 };
+
+	return kind | ((f >> 4) & 15) << 3;
+}
+
+inline u32 unpack_flags(u32 s) {
+	return FLAG_KINDS[s & 7] | ((s >> 3) & 15) << 4;
+}
 
 enum ORZ_OPTION : u32 {
 
@@ -623,7 +654,7 @@ inline _orz_container read_container(const std::vector<u8>& file) {
 		return c;
 	}
 
-	h.flags = read_bucket(bs, i, 12);
+	h.flags = unpack_flags(read_bucket(bs, i, 7));
 
 	for (int k{}; k < 32; ++k)
 		h.crc |= u32(small_read<1>(bs, i)) << k;
@@ -723,6 +754,9 @@ TARGET_SSE42 inline u32 crc32c(u32 crc, const void* data, size_t size) {
 
 	return c32;
 }
+
+// where the replay CRC starts: not 0, so an all-zero header (a cut file reads as zeros) does not check out
+constexpr u32 ORZ_CRC_SEED{ 0xFFFFFFFF };
 
 FORCEINLINE u32 crc32c_frame(u32 crc, const _osr_frame& f) {
 	return crc32c(crc, &f, sizeof f);
