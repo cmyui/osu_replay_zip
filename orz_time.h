@@ -1,87 +1,48 @@
 #pragma once
 
-#include "time_prior.h"
-
 #include <algorithm>
-#include <span>
-#include <vector>
+
+#include "orz_shared.h"
+#include "orz_write.h"
 
 namespace frame_time {
 
-	constexpr int TIME_EXACT{ 64 };
-	constexpr u32 TIME_INC{ 256 };
+	struct _grid_period {
+		i64 num, den;
+	};
 
-	static_assert([] {
-		for (const u32 w : TIME_PRIOR_WEIGHT)
-			if (!rc::safe_increment(TIME_EXACT, TIME_INC, w))
-				return false;
-		return true;
-	}(), "time coder increment / prior weight can overflow the 16 bit frequencies");
+	constexpr _grid_period GRID_PERIODS[]{ { 50, 3 }, { 25, 1 }, { 25, 2 }, { 100, 3 }, { 20, 1 }, { 0, 1 } };
+	constexpr u32 GRID_PERIOD_COUNT{ 6 }, GRID_BINS{ 25 };
 
-	enum kind : u32 { osu, mania, taiko, fruits };
+	FORCEINLINE u64 grid_phase(i64 now, const _grid_period& p) {
 
-	FORCEINLINE rc::value_coder make_coder(kind k) {
-
-		rc::value_coder c{ TIME_EXACT, TIME_INC };
-
-		c.prior = { TIME_PRIOR_ROW.data() + TIME_PRIOR_FIRST_ROW[k], TIME_PRIOR_START, TIME_PRIOR_VALUES, TIME_PRIOR_ROWS[k] };
-		c.prior_weight = TIME_PRIOR_WEIGHT[k];
-
-		return c;
-	}
-
-	
-	FORCEINLINE u64 rate_class(const int common_delta) {
-
-		return common_delta < 14 ? 0 :
-			(common_delta <= 20 ? 1 : 2);
-	}
-
-	FORCEINLINE u64 grid_bin(i64 now) {
-
-		const i64 phase{ ((now * 3) % 50 + 50) % 50 }; // in 1/3 ms
-
-		return (u64)(phase * 25 / 50);
-	}
-
-	inline u64 osu_ctx(const std::vector<_osr_frame>& R, size_t i, i64 now, u64 rate) {
-
-		if (i < 2)
+		if (p.num == 0)
 			return 0;
 
-		const int a{ R[i].keys != R[i - 1].keys }, b{ R[i - 1].keys != R[i - 2].keys };
+		const i64 phase{ now * p.den };
 
-		if (i >= 3 && (u32)R[i - 1].delta <= 1 && (u32)R[i - 2].delta <= 1) {
+		switch (p.num) {
 
-			size_t j{ i - 1 };
-			u64 run{}, prev_run{};
+			case 50: return ((phase % 50 + 50) % 50) * GRID_BINS / 50;
+			case 25: return ((phase % 25 + 25) % 25) * GRID_BINS / 25;
+			case 100: return ((phase % 100 + 100) % 100) * GRID_BINS / 100;
+			case 20: return ((phase % 20 + 20) % 20) * GRID_BINS / 20;
+			default: return (u64)((((phase % p.num + p.num) % p.num) * GRID_BINS) / p.num);
 
-			for (; j > 0 && R[j].delta == 0 && run < 7; --j)
-				++run;
+		}
+	}
 
-			if (j > 0 && R[j].delta != 0)
-				for (--j; j > 0 && R[j].delta == 0 && prev_run < 7; --j)
-					++prev_run;
+	struct _time_grid {
 
-			return 300 + ((u64)a * 8 + run) * 8 + prev_run;
+		_grid_period period{ GRID_PERIODS[0] };
+
+		explicit _time_grid(u32 grid) : period{ GRID_PERIODS[grid < GRID_PERIOD_COUNT ? grid : 0] } {}
+
+		u64 bin(i64 now) const {
+			return grid_phase(now, period);
 		}
 
-		return ((u64)(a * 2 + b) * 25 + grid_bin(now)) * 3 + rate;
-	}
-
-	FORCEINLINE u64 grid_ctx(bool changed, i64 now, size_t i) {
-		return i < 2 ? 0 : (u64)changed * 25 + grid_bin(now);
-	}
-
-	FORCEINLINE std::vector<u8> key_updates(const std::vector<_osr_frame>& r) {
-
-		std::vector<u8> c(r.size());
-
-		for (size_t i{ 1 }; i < r.size(); ++i)
-			c[i] = r[i].keys != r[i - 1].keys;
-
-		return c;
-	}
+	};
 
 	FORCEINLINE std::vector<int> deltas(const std::vector<_osr_frame>& r) {
 
@@ -92,8 +53,61 @@ namespace frame_time {
 
 		return delta;
 	}
-	
-	inline std::vector<int> write_table(_orz_construct& orz, std::span<const int> delta) {
+
+	constexpr u32 TABLE_RANKED{ 32 }, TABLE_SYMBOLS{ 96 }, TABLE_FIRST{ 33 };
+
+	constexpr u8 TABLE_ORDER[34][96]{
+		{ 33, 42, 1, 19, 2, 20, 25, 53, 18, 17, 21, 3, 4, 27, 24, 28, 22, 6, 15, 5, 23, 13, 7, 14, 9, 51, 8, 29, 10, 12, 11, 26, 30, 58, 16, 44, 56, 31, 54, 60, 49, 39, 47, 45, 43, 62, 37, 46, 41, 64, 66, 59, 57, 70, 48, 55, 68, 72, 0, 32, 34, 35, 36, 38, 40, 50, 52, 61, 63, 65, 67, 69, 71, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95 },
+		{ 0, 2, 20, 19, 3, 17, 4, 5, 21, 13, 10, 11, 18, 9, 6, 42, 8, 14, 7, 25, 12, 15, 27, 28, 23, 29, 16, 22, 24, 30, 26, 31, 44, 53, 33, 49, 56, 41, 37, 51, 39, 54, 47, 58, 48, 52, 45, 60, 35, 46, 59, 62, 43, 50, 55, 1, 32, 34, 36, 38, 40, 57, 61, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95 },
+		{ 3, 1, 4, 5, 0, 6, 7, 11, 10, 8, 9, 14, 12, 13, 15, 17, 25, 20, 24, 21, 18, 19, 22, 16, 23, 42, 28, 26, 30, 29, 27, 31, 33, 39, 53, 44, 51, 49, 47, 58, 45, 46, 48, 54, 37, 43, 56, 41, 50, 59, 60, 63, 64, 2, 32, 34, 35, 36, 38, 40, 52, 55, 57, 61, 62, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95 },
+		{ 4, 5, 2, 6, 1, 10, 7, 8, 9, 11, 13, 14, 12, 0, 15, 18, 22, 17, 19, 23, 25, 16, 20, 24, 21, 42, 26, 27, 29, 28, 30, 31, 33, 44, 47, 49, 51, 39, 48, 56, 37, 41, 45, 46, 57, 35, 43, 52, 53, 54, 60, 3, 32, 34, 36, 38, 40, 50, 55, 58, 59, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95 },
+		{ 5, 6, 3, 8, 7, 13, 2, 12, 10, 9, 11, 14, 1, 15, 20, 18, 0, 25, 19, 23, 21, 17, 16, 24, 22, 42, 26, 27, 28, 29, 31, 30, 33, 49, 51, 39, 53, 41, 44, 45, 47, 48, 54, 59, 60, 37, 43, 46, 56, 4, 32, 34, 35, 36, 38, 40, 50, 52, 55, 57, 58, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95 },
+		{ 6, 4, 8, 7, 9, 3, 10, 12, 11, 2, 13, 1, 14, 20, 15, 19, 21, 18, 0, 23, 16, 17, 22, 25, 24, 42, 27, 26, 28, 29, 30, 31, 53, 44, 33, 39, 49, 51, 45, 60, 64, 41, 47, 48, 52, 54, 56, 5, 32, 34, 35, 36, 37, 38, 40, 43, 46, 50, 55, 57, 58, 59, 61, 62, 63, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95 },
+		{ 8, 7, 11, 9, 5, 10, 4, 12, 3, 13, 14, 2, 15, 19, 1, 21, 20, 18, 0, 22, 16, 23, 17, 42, 24, 28, 25, 27, 26, 29, 30, 31, 33, 44, 53, 39, 51, 37, 41, 35, 45, 47, 57, 64, 6, 32, 34, 36, 38, 40, 43, 46, 48, 49, 50, 52, 54, 55, 56, 58, 59, 60, 61, 62, 63, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95 },
+		{ 10, 8, 9, 6, 11, 5, 12, 4, 13, 3, 14, 2, 15, 1, 18, 21, 19, 20, 22, 0, 17, 16, 23, 24, 25, 42, 27, 26, 28, 29, 30, 31, 44, 39, 53, 33, 47, 51, 54, 56, 58, 66, 7, 32, 34, 35, 36, 37, 38, 40, 41, 43, 45, 46, 48, 49, 50, 52, 55, 57, 59, 60, 61, 62, 63, 64, 65, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95 },
+		{ 9, 7, 10, 6, 11, 12, 5, 13, 4, 14, 3, 2, 15, 19, 1, 20, 18, 22, 17, 0, 21, 16, 23, 24, 42, 28, 25, 26, 27, 29, 30, 31, 33, 53, 44, 37, 39, 49, 48, 51, 54, 58, 62, 64, 66, 8, 32, 34, 35, 36, 38, 40, 41, 43, 45, 46, 47, 50, 52, 55, 56, 57, 59, 60, 61, 63, 65, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95 },
+		{ 8, 7, 10, 12, 11, 5, 6, 4, 13, 15, 14, 3, 18, 2, 1, 19, 16, 20, 21, 0, 22, 17, 23, 42, 28, 24, 25, 27, 29, 26, 30, 31, 53, 33, 44, 41, 47, 49, 51, 56, 59, 64, 9, 32, 34, 35, 36, 37, 38, 39, 40, 43, 45, 46, 48, 50, 52, 54, 55, 57, 58, 60, 61, 62, 63, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95 },
+		{ 11, 9, 7, 12, 8, 6, 13, 5, 4, 14, 3, 15, 19, 2, 1, 20, 18, 21, 0, 16, 22, 17, 23, 24, 42, 25, 28, 29, 26, 27, 31, 30, 33, 51, 44, 49, 37, 39, 43, 47, 54, 58, 62, 10, 32, 34, 35, 36, 38, 40, 41, 45, 46, 48, 50, 52, 53, 55, 56, 57, 59, 60, 61, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95 },
+		{ 12, 10, 13, 6, 9, 14, 7, 5, 8, 3, 4, 15, 1, 2, 19, 20, 18, 0, 21, 17, 16, 22, 23, 42, 24, 28, 27, 29, 25, 30, 26, 31, 44, 33, 51, 54, 45, 46, 47, 49, 52, 53, 56, 64, 11, 32, 34, 35, 36, 37, 38, 39, 40, 41, 43, 48, 50, 55, 57, 58, 59, 60, 61, 62, 63, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95 },
+		{ 13, 11, 14, 10, 9, 5, 7, 8, 6, 20, 15, 18, 1, 19, 4, 3, 2, 21, 0, 17, 16, 22, 23, 42, 27, 28, 29, 24, 30, 26, 25, 31, 53, 33, 51, 44, 47, 49, 58, 60, 39, 64, 54, 12, 32, 34, 35, 36, 37, 38, 40, 41, 43, 45, 46, 48, 50, 52, 55, 56, 57, 59, 61, 62, 63, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95 },
+		{ 12, 14, 11, 10, 20, 9, 7, 8, 19, 4, 15, 6, 18, 5, 1, 3, 2, 0, 17, 16, 21, 22, 42, 23, 27, 29, 24, 28, 30, 26, 25, 31, 53, 33, 44, 51, 54, 62, 45, 58, 39, 41, 49, 56, 13, 32, 34, 35, 36, 37, 38, 40, 43, 46, 47, 48, 50, 52, 55, 57, 59, 60, 61, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95 },
+		{ 19, 13, 15, 18, 12, 11, 4, 3, 8, 10, 7, 6, 5, 9, 2, 16, 20, 1, 17, 0, 21, 22, 42, 23, 27, 29, 24, 28, 26, 30, 31, 25, 53, 33, 58, 51, 49, 44, 37, 56, 47, 60, 64, 41, 48, 62, 14, 32, 34, 35, 36, 38, 39, 40, 43, 45, 46, 50, 52, 54, 55, 57, 59, 61, 63, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95 },
+		{ 14, 18, 19, 2, 3, 4, 16, 13, 10, 7, 12, 5, 6, 17, 8, 9, 11, 1, 0, 20, 21, 22, 23, 28, 42, 27, 25, 24, 26, 29, 30, 31, 33, 53, 44, 49, 51, 55, 58, 37, 66, 47, 15, 32, 34, 35, 36, 38, 39, 40, 41, 43, 45, 46, 48, 50, 52, 54, 56, 57, 59, 60, 61, 62, 63, 64, 65, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95 },
+		{ 18, 15, 17, 2, 3, 8, 4, 14, 1, 5, 0, 19, 13, 9, 11, 7, 6, 12, 10, 20, 21, 22, 27, 23, 29, 28, 42, 30, 24, 31, 26, 25, 33, 53, 58, 43, 37, 39, 44, 51, 55, 45, 60, 16, 32, 34, 35, 36, 38, 40, 41, 46, 47, 48, 49, 50, 52, 54, 56, 57, 59, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95 },
+		{ 16, 18, 15, 14, 19, 13, 20, 12, 8, 11, 4, 3, 21, 7, 5, 9, 2, 10, 6, 22, 1, 0, 27, 23, 28, 29, 42, 30, 24, 26, 25, 31, 53, 33, 58, 51, 37, 49, 54, 60, 39, 43, 44, 46, 17, 32, 34, 35, 36, 38, 40, 41, 45, 47, 48, 50, 52, 55, 56, 57, 59, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95 },
+		{ 15, 19, 14, 0, 17, 16, 13, 20, 12, 7, 21, 3, 9, 8, 4, 6, 11, 10, 5, 2, 53, 22, 1, 42, 23, 27, 28, 29, 24, 30, 51, 58, 26, 44, 25, 31, 33, 56, 60, 49, 54, 62, 64, 47, 66, 39, 41, 43, 68, 35, 37, 18, 32, 34, 36, 38, 40, 45, 46, 48, 50, 52, 55, 57, 59, 61, 63, 65, 67, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95 },
+		{ 20, 14, 13, 0, 21, 18, 1, 4, 12, 17, 6, 53, 8, 11, 16, 10, 22, 3, 7, 5, 15, 2, 42, 9, 23, 27, 28, 29, 24, 26, 51, 30, 25, 58, 44, 56, 49, 54, 31, 33, 60, 47, 64, 66, 45, 62, 35, 43, 41, 46, 70, 48, 52, 55, 68, 19, 32, 34, 36, 37, 38, 39, 40, 50, 57, 59, 61, 63, 65, 67, 69, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95 },
+		{ 21, 0, 19, 22, 12, 1, 13, 53, 18, 42, 10, 23, 11, 5, 16, 17, 9, 7, 2, 14, 8, 6, 27, 15, 4, 28, 24, 29, 3, 51, 26, 30, 44, 25, 33, 58, 56, 49, 54, 60, 31, 47, 62, 64, 43, 45, 66, 39, 41, 52, 55, 68, 46, 48, 57, 61, 72, 20, 32, 34, 35, 36, 37, 38, 40, 50, 59, 63, 65, 67, 69, 70, 71, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95 },
+		{ 22, 20, 23, 0, 42, 19, 7, 12, 11, 8, 10, 27, 1, 9, 17, 18, 28, 6, 2, 24, 5, 29, 3, 15, 13, 16, 53, 26, 4, 14, 25, 51, 58, 44, 31, 56, 33, 30, 49, 54, 60, 47, 62, 45, 41, 43, 64, 35, 39, 48, 55, 46, 52, 66, 57, 59, 70, 21, 32, 34, 36, 37, 38, 40, 50, 61, 63, 65, 67, 68, 69, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95 },
+		{ 23, 21, 28, 42, 24, 20, 27, 0, 9, 8, 26, 7, 18, 3, 1, 19, 6, 10, 2, 4, 12, 5, 13, 11, 53, 17, 25, 14, 16, 15, 51, 29, 30, 33, 60, 49, 58, 56, 44, 54, 47, 31, 62, 39, 45, 59, 35, 43, 52, 66, 72, 37, 41, 55, 64, 68, 22, 32, 34, 36, 38, 40, 46, 48, 50, 57, 61, 63, 65, 67, 69, 70, 71, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95 },
+		{ 24, 27, 22, 42, 26, 21, 25, 0, 5, 3, 9, 4, 20, 2, 6, 7, 10, 8, 1, 19, 11, 18, 28, 13, 14, 16, 15, 12, 17, 53, 29, 30, 51, 31, 58, 49, 60, 33, 44, 54, 47, 56, 41, 62, 43, 64, 52, 45, 37, 48, 66, 68, 39, 46, 57, 59, 23, 32, 34, 35, 36, 38, 40, 50, 55, 61, 63, 65, 67, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95 },
+		{ 26, 25, 23, 42, 27, 0, 22, 3, 21, 4, 2, 5, 6, 20, 10, 19, 1, 11, 28, 7, 14, 18, 9, 12, 53, 15, 29, 8, 16, 13, 17, 30, 51, 49, 56, 60, 54, 31, 58, 44, 33, 62, 47, 41, 35, 46, 48, 59, 39, 43, 52, 55, 37, 45, 57, 61, 66, 24, 32, 34, 36, 38, 40, 50, 63, 64, 65, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95 },
+		{ 24, 26, 0, 2, 42, 27, 23, 3, 4, 28, 5, 1, 6, 22, 7, 21, 29, 20, 19, 15, 53, 9, 11, 10, 14, 13, 8, 12, 49, 30, 51, 17, 18, 31, 16, 33, 54, 47, 56, 58, 60, 44, 43, 48, 45, 52, 41, 39, 62, 57, 35, 37, 59, 66, 46, 50, 55, 61, 64, 25, 32, 34, 36, 38, 40, 63, 65, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95 },
+		{ 23, 27, 24, 25, 3, 42, 4, 2, 0, 5, 28, 6, 22, 10, 11, 21, 12, 20, 1, 19, 7, 8, 9, 29, 30, 14, 53, 16, 18, 13, 15, 17, 51, 31, 33, 54, 49, 58, 60, 47, 39, 41, 43, 44, 62, 37, 45, 56, 48, 55, 66, 35, 46, 59, 64, 52, 57, 61, 68, 26, 32, 34, 36, 38, 40, 50, 63, 65, 67, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95 },
+		{ 28, 22, 23, 42, 0, 26, 29, 25, 6, 24, 21, 5, 53, 1, 30, 20, 4, 7, 3, 9, 2, 13, 10, 19, 8, 31, 51, 17, 12, 14, 49, 18, 11, 33, 15, 54, 58, 16, 44, 56, 60, 47, 39, 45, 41, 64, 48, 55, 52, 59, 62, 37, 46, 66, 43, 61, 70, 27, 32, 34, 35, 36, 38, 40, 50, 57, 63, 65, 67, 68, 69, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95 },
+		{ 29, 42, 21, 27, 30, 0, 26, 22, 20, 53, 1, 6, 25, 31, 9, 7, 19, 8, 10, 23, 2, 4, 51, 3, 17, 15, 12, 56, 5, 18, 11, 16, 24, 49, 58, 14, 54, 13, 60, 44, 33, 52, 39, 47, 64, 48, 37, 41, 62, 66, 55, 45, 35, 43, 50, 59, 46, 57, 61, 28, 32, 34, 36, 38, 40, 63, 65, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95 },
+		{ 42, 30, 28, 31, 0, 20, 53, 27, 26, 19, 25, 21, 1, 51, 18, 15, 14, 2, 24, 56, 9, 6, 16, 33, 49, 17, 58, 13, 5, 7, 10, 23, 54, 12, 22, 3, 11, 8, 4, 60, 44, 39, 52, 61, 62, 55, 47, 59, 45, 57, 37, 43, 46, 48, 64, 66, 35, 41, 50, 70, 29, 32, 34, 36, 38, 40, 63, 65, 67, 68, 69, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95 },
+		{ 42, 31, 29, 28, 0, 51, 53, 27, 26, 19, 33, 1, 2, 15, 54, 18, 3, 25, 23, 39, 49, 56, 7, 17, 21, 16, 14, 6, 24, 22, 11, 13, 10, 5, 20, 12, 9, 60, 8, 4, 46, 44, 47, 58, 57, 45, 55, 37, 59, 43, 52, 35, 41, 66, 48, 62, 64, 68, 30, 32, 34, 36, 38, 40, 50, 61, 63, 65, 67, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95 },
+		{ 42, 30, 29, 0, 28, 51, 27, 53, 56, 33, 26, 16, 60, 1, 59, 39, 49, 2, 9, 14, 17, 8, 4, 7, 18, 20, 25, 54, 10, 11, 3, 13, 23, 21, 22, 5, 15, 19, 12, 6, 24, 44, 45, 46, 47, 55, 43, 37, 41, 66, 52, 62, 64, 31, 32, 34, 35, 36, 38, 40, 48, 50, 57, 58, 61, 63, 65, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95 },
+		{ 42, 44, 53, 58, 31, 56, 0, 59, 30, 33, 60, 51, 57, 46, 54, 55, 29, 39, 61, 28, 27, 22, 24, 25, 21, 1, 49, 52, 41, 26, 23, 37, 62, 20, 43, 2, 19, 3, 63, 64, 4, 35, 47, 5, 48, 45, 65, 66, 11, 6, 12, 7, 67, 10, 9, 13, 8, 16, 50, 18, 14, 15, 17, 68, 69, 70, 71, 72, 73, 74, 75, 32, 34, 36, 38, 40, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95 },
+		{ 17, 25, 1, 16, 0, 2, 3, 15, 4, 18, 24, 14, 5, 12, 6, 13, 26, 8, 10, 19, 7, 11, 9, 23, 22, 20, 21, 27, 29, 28, 30, 42, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95 },
+	};
+
+	inline u32 table_symbol(int v) {
+
+		if (v >= 0 && v < (int)TABLE_RANKED)
+			return (u32)v;
+
+		const u32 m{ v < 0 ? 0u - (u32)v : (u32)v };
+
+		return TABLE_RANKED + ((u32)std::bit_width(m) - 1) * 2 + (v < 0);
+	}
+
+	inline bool table_unused(u8 x, u64 used) {
+		return x >= TABLE_RANKED || !((used >> x) & 1);
+	}
+
+	inline std::vector<int> build_table(std::span<const int> delta) {
 
 		std::vector<std::pair<u32, u32>> counts{};
 
@@ -104,115 +118,253 @@ namespace frame_time {
 
 		std::sort(counts.begin(), counts.end(), pair_sort);
 
-		std::vector<int> table(counts.size());
+		std::vector<int> table;
 
-		for (size_t k{}; k < counts.size(); ++k)
-			table[k] = std::bit_cast<int>(counts[k].first);
+		table.reserve(counts.size());
 
-		bit_stream t{};
+		u64 used{};
+		u32 at{ TABLE_FIRST };
+
+		for (size_t i{}; i < counts.size(); ++i) {
+
+			size_t end{ i };
+
+			while (end < counts.size() && counts[end].second == counts[i].second)
+				++end;
+
+			size_t best{ i };
+
+			for (const u8 x : TABLE_ORDER[at]) {
+
+				if (!table_unused(x, used))
+					continue;
+
+				bool found{};
+
+				for (size_t k{ i }; k < end; ++k) {
+
+					const int v{ std::bit_cast<int>(counts[k].first) };
+
+					if (table_symbol(v) == x && (!found || v < std::bit_cast<int>(counts[best].first))) {
+
+						best = k;
+						found = true;
+
+					}
+
+				}
+
+				if (found)
+					break;
+
+			}
+
+			std::swap(counts[i], counts[best]);
+
+			const int v{ std::bit_cast<int>(counts[i].first) };
+
+			table.push_back(v);
+
+			if (v >= 0 && v < (int)TABLE_RANKED)
+				used |= u64(1) << v;
+
+			at = std::min(table_symbol(v), TABLE_RANKED);
+
+		}
+
+		return table;
+	}
+
+	inline u32 pick_grid(std::span<const int> delta) {
+
+		constexpr int SYM{ 48 };
+
+		u32 counts[GRID_PERIOD_COUNT][GRID_BINS][SYM]{};
+
+		i64 now{};
+
+		for (const int d : delta) {
+
+			const int s{ std::clamp(d, 0, SYM - 1) };
+
+			for (u32 g{}; g < GRID_PERIOD_COUNT; ++g)
+				++counts[g][grid_phase(now, GRID_PERIODS[g])][s];
+
+			now += d;
+
+		}
+
+		u32 best{};
+		double best_bits{ std::numeric_limits<double>::max() };
+
+		for (u32 g{}; g < GRID_PERIOD_COUNT; ++g) {
+
+			double bits{};
+
+			for (const auto& row : counts[g]) {
+
+				u32 total{};
+
+				for (const u32 c : row)
+					total += c;
+
+				for (const u32 c : row)
+					if (c)
+						bits += c * std::log2((double)total / c) + 0.5 * std::log2((double)total);
+
+			}
+
+			if (bits < best_bits) {
+
+				best_bits = bits;
+				best = g;
+
+			}
+
+		}
+
+		return best;
+	}
+
+	inline void write_gamma(u32 r, bit_stream& t) {
+
+		const u32 v{ r + 1 };
+		const int n{ (int)std::bit_width(v) };
+
+		for (int b{ 1 }; b < n; ++b)
+			t.push_back(0);
+
+		for (int b{ n - 1 }; b >= 0; --b)
+			t.push_back((v >> b) & 1);
+
+	}
+
+	inline bool read_gamma(const _bit_view t, size_t& bit, u32 max, u32& r) {
+
+		const int limit{ (int)std::bit_width(max + 1) };
+
+		int n{ 1 };
+
+		while (bit < t.max_size() && !t[bit]) {
+
+			++bit;
+
+			if (++n > limit)
+				return false;
+
+		}
+
+		u32 v{};
+
+		for (int b{}; b < n; ++b)
+			v = (v << 1) | small_read<1>(t, bit);
+
+		r = v - 1;
+
+		return v != 0 && r <= max;
+	}
+
+	// the delta table and time grid, at the front of the stream holding the times
+	inline void write_table(bit_stream& t, const std::vector<int>& table, u32 grid) {
 
 		small_write<5>((u32)table.size(), t);
 
-		for (const int v : table)
-			small_write<5>((u32)std::abs(v), t);
+		u64 used{};
+		u32 at{ TABLE_FIRST };
 
-		for (const int v : table)
-			t.push_back(v < 0);
+		for (const int v : table) {
 
-		orz.add_stream(orz_tag::time_delta_table, t.data.data(), t.data.size());
+			const u32 sym{ table_symbol(v) };
 
-		return table;
-	}
+			u32 r{};
 
-	inline std::vector<int> read_table(const _stream_map& stream_data) {
+			for (const u8 x : TABLE_ORDER[at]) {
 
-		const _bit_view t{ stream_data[orz_tag::time_delta_table] };
+				if (x == sym)
+					break;
 
-		size_t bit{};
+				r += table_unused(x, used);
 
-		std::vector<int> table(std::min<size_t>(small_read<5>(t, bit), t.max_size() / 6));
+			}
 
-		for (auto& v : table)
-			v = (int)small_read<5>(t, bit);
+			write_gamma(r, t);
 
-		for (auto& v : table)
-			if (small_read<1>(t, bit))
-				v = (int)(0u - (u32)v); // negate without overflow
+			if (sym < TABLE_RANKED)
+				used |= u64(1) << sym;
+			else {
 
-		return table;
-	}
-	
-	template<typename Ctx>
-	void write_indices(_orz_construct& orz, orz_tag tag, kind k, const std::vector<int>& table, std::span<const int> delta, Ctx ctx) {
+				const u32 m{ v < 0 ? 0u - (u32)v : (u32)v };
 
-		rc::rc_encoder e{};
-		rc::value_coder coder{ make_coder(k) };
+				for (int b{ (int)std::bit_width(m) - 2 }; b >= 0; --b)
+					t.push_back((m >> b) & 1);
 
-		i64 now{};
+			}
 
-		for (size_t i{}; i < delta.size(); ++i) {
-
-			const u32 index{ (u32)(std::find(table.begin(), table.end(), delta[i]) - table.begin()) };
-
-			coder.encode(e, ctx(i, now), index);
-
-			now += delta[i];
+			at = std::min(sym, TABLE_RANKED);
 
 		}
 
-		const auto& bytes{ e.finish() };
+		for (int b{}; b < 3; ++b)
+			t.push_back((grid >> b) & 1);
 
-		orz.add_stream(tag, bytes.data(), bytes.size());
 	}
-	
-	template<typename Ctx, typename Set>
-	void read_indices(std::span<const u8> data, kind k, const std::vector<int>& table, size_t n, Ctx ctx, Set set) {
 
-		rc::rc_decoder d{ data };
-		rc::value_coder coder{ make_coder(k) };
+	// from bit `bit` of t, which ends past it
+	inline std::vector<int> read_table(const _bit_view t, size_t& bit, u32& grid) {
 
-		i64 now{};
+		const size_t n{ small_read<5>(t, bit) };
 
-		for (size_t i{}; i < n; ++i) {
+		std::vector<int> table;
 
-			const u64 index{ coder.decode(d, ctx(i, now)) };
-			const int delta{ index < table.size() ? table[index] : 0 };
+		u64 used{};
+		u32 at{ TABLE_FIRST };
 
-			set(i, delta);
+		for (size_t k{}; k < n && bit < t.max_size(); ++k) {
 
-			now += delta;
+			u32 r;
+
+			if (!read_gamma(t, bit, TABLE_SYMBOLS - 1, r))
+				break;
+
+			u32 sym{ TABLE_SYMBOLS };
+
+			for (const u8 x : TABLE_ORDER[at])
+				if (table_unused(x, used) && r-- == 0) {
+
+					sym = x;
+
+					break;
+				}
+
+			if (sym == TABLE_SYMBOLS)
+				break;
+
+			int v{ (int)sym };
+
+			if (sym < TABLE_RANKED)
+				used |= u64(1) << sym;
+			else {
+
+				u32 m{ 1 };
+
+				for (u32 b{ (sym - TABLE_RANKED) >> 1 }; b > 0; --b)
+					m = (m << 1) | small_read<1>(t, bit);
+
+				v = std::bit_cast<int>(sym & 1 ? 0u - m : m);
+
+			}
+
+			table.push_back(v);
+			at = std::min(sym, TABLE_RANKED);
 
 		}
 
-	}
-	
-	inline void write_grid(_orz_construct& orz, orz_tag tag, kind k, const std::vector<int>& delta, const std::vector<u8>& changed) {
+		grid = 0;
 
-		const auto table{ write_table(orz, delta) };
+		for (int b{}; b < 3; ++b)
+			grid |= (u32)small_read<1>(t, bit) << b;
 
-		write_indices(orz, tag, k, table, delta, [&](size_t i, i64 now) {
-
-			return grid_ctx(changed[i], now, i);
-		});
-
-	}
-
-	inline std::vector<int> read_grid(const _stream_map& stream_data, orz_tag tag, kind k, const std::vector<u8>& changed) {
-
-		std::vector<int> delta(changed.size());
-
-		read_indices(stream_data[tag], k, read_table(stream_data), delta.size(),
-			[&](size_t i, i64 now) {
-
-				return grid_ctx(changed[i], now, i);
-			},
-			[&](size_t i, int d) {
-
-				delta[i] = d;
-
-			});
-
-		return delta;
+		return table;
 	}
 
 }

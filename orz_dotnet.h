@@ -1,15 +1,14 @@
 #pragma once
 
-#include "orz_decimal.h"
-
-#include <algorithm>
-#include <bit>
 #include <charconv>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <string>
+
+#include "orz_decimal.h"
+#include "orz_shared.h"
 
 namespace dotnet {
 
@@ -242,7 +241,7 @@ namespace dotnet {
 				return a < lo ? -1 :
 					(a >= hi ? 1 : 0);
 			}
-			
+
 			if (v >= 0.f)
 				return 1;
 
@@ -446,7 +445,7 @@ namespace dotnet {
 
 		return true;
 	}
-	
+
 	inline float from_text_ord(i64 ord, bool exact_text) {
 
 		if (ord < -(1ll << 62) || ord > (1ll << 62))
@@ -463,7 +462,7 @@ namespace dotnet {
 
 			const i64 q{ o - 1 };
 			const i64 e{ q / 9000000 - 56 };
-			
+
 			if (e <= 40 && e >= -60)
 				v = orz_decimal::to_float(q % 9000000 + 1000000, (int)e);
 

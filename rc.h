@@ -6,10 +6,8 @@
 
 #include <algorithm>
 #include <bit>
-#include <cstdint>
-#include <span>
-#include <unordered_map>
-#include <vector>
+
+#include "orz_shared.h"
 
 namespace rc {
 

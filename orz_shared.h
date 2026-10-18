@@ -1,10 +1,8 @@
 #pragma once
 
 #include <algorithm>
-#include <array>
 #include <bit>
-#include <charconv>
-#include <cmath>
+#include <cfloat>
 #include <cstdint>
 #include <cstring>
 #include <emmintrin.h>
@@ -12,9 +10,8 @@
 #include <fstream>
 #include <new>
 #include <span>
-#include <stdexcept>
-#include <string>
-#include <vector>
+
+#include "Lib/7zTypes.h"
 
 #if defined(_M_FP_FAST) || defined(_M_FP_CONTRACT) || defined(__FAST_MATH__)
 #error "breaks without strict IEEE float maths (/fp:precise)"
@@ -24,7 +21,13 @@
 #endif
 static_assert(FLT_EVAL_METHOD == 0, "float must not use extended precision (x87)");
 
+#if defined(_MSC_VER)
 #define FORCEINLINE __forceinline
+#define TARGET_SSE42
+#else
+#define FORCEINLINE inline __attribute__((always_inline))
+#define TARGET_SSE42 __attribute__((target("sse4.2"))) // the CRC instructions, without building everything for SSE 4.2
+#endif
 
 typedef uint8_t u8;
 typedef uint16_t u16;
@@ -51,14 +54,18 @@ constexpr u32 ORZ_VERSION{ 0 };
 // limits for untrusted input, real replays are far below all of them and anything beyond is treated as corrupted
 constexpr size_t ORZ_MAX_FRAMES{ 1u << 22 }; // (~19 hours at 60 fps)
 constexpr size_t ORZ_MAX_STREAM{ 1u << 28 };
-constexpr size_t ORZ_MAX_STREAMS{ 256 };
 
-enum ORZ_FLAG {
+// what a replay is: the game mode, relax or autopilot (osu! only, frames coded with the autopilot path model), and so the
+// form of its frames. osu!catch relax is coded as osu!standard frames (the cursor drives the catcher). The first four are
+// the .osr's game mode numbers.
+enum class orz_kind : u32 { osu, taiko, fruits, mania, osu_relax, taiko_relax, fruits_relax, osu_autopilot };
 
-	gamemode_std = 1 << 0,
-	gamemode_taiko = 1 << 1,
-	gamemode_fruits = 1 << 2,
-	gamemode_mania = 1 << 3,
+// the encode info as a file stores it: the kind in the low 3 bits, then a bit each
+enum ORZ_DECODE_INFO : u32 {
+
+	kind_bits = 7,
+
+	is_valid = 1 << 3,
 
 	has_osr_header = 1 << 4,
 
@@ -67,18 +74,36 @@ enum ORZ_FLAG {
 	replay_verbatim = 1 << 6,
 
 	text_shortest = 1 << 7, // floats are 'shortest round-trip' (newer .NET, osu!lazer)
-	mania_columns = 1 << 8, // osu!mania column / scroll speed streams
-
-	taiko_keys = 1 << 9, // osu!taiko positions from the keys, rc time
-	fruits_catcher = 1 << 10, // catcher positions against a movement prediction
 
 };
+
+constexpr u32 ORZ_DECODE_INFO_BITS{ 7 };
+
+FORCEINLINE orz_kind info_kind(u32 info) {
+	return (orz_kind)(info & ORZ_DECODE_INFO::kind_bits);
+}
+
+FORCEINLINE u32 with_kind(u32 info, orz_kind k) {
+	return (info & ~u32(ORZ_DECODE_INFO::kind_bits)) | (u32)k;
+}
+
+// the game mode, numbered as the .osr does (osu!, taiko, catch, mania)
+FORCEINLINE u32 kind_mode(orz_kind k) {
+	return k == orz_kind::osu_autopilot ? 0 : (u32)k & 3;
+}
+
+FORCEINLINE bool kind_relax(orz_kind k) {
+	return k >= orz_kind::osu_relax && k <= orz_kind::fruits_relax;
+}
+
+// frames of the other modes (orz_modes.h), else osu!standard's (orz_frames.h)
+FORCEINLINE bool kind_other_frames(orz_kind k) {
+	return k == orz_kind::taiko || k == orz_kind::fruits || k == orz_kind::mania || k == orz_kind::taiko_relax;
+}
 
 enum ORZ_OPTION : u32 {
 
 	ENCODE_CHECK_ROUND_TRIP = 1 << 0,
-
-	DECODE_OSU_STABLE_LZMA = 1 << 1,
 
 	DECODE_SKIP_CRC = 1 << 2,
 
@@ -88,46 +113,17 @@ enum ORZ_OPTION : u32 {
 };
 
 constexpr u32 OSR_MOD_RELAX{ 1 << 7 };
+constexpr u32 OSR_MOD_AUTOPILOT{1 << 13};
 
 enum class orz_tag : u8 {
 
-	time_delta_table = 0,
+	// delta table and the mode's model, then the context mixed frames: orz_frames.h (osu!standard), orz_modes.h (other modes)
+	frames = 0,
 
-	key_bit_stream,
-
-	osr_header,
-	osr_after_life,
-	osr_tail,
-
-	seed,
-
-	life_bar,
-
-	time_delta_rc,
+	osr_parts, // the .osr bytes around the replay data: the header, the life bar, what follows it, what follows the replay data (orz_parts.h)
 	osr_replay_data,
 
-	device_space_info,
-	device_escape,
-	device_escape_values,
-	device_moves_rc,
-
-	mania_time_rc,
-	mania_scroll_speed,
-
-	taiko_time_rc,
-	taiko_escape,
-
-	fruits_time_rc,
-	fruits_x_rc,
-	fruits_escape,
-
 };
-
-#define _7Z_NO_METHOD_LZMA2
-
-#include "LzmaEnc.h"
-#include "LzmaDec.h"
-#include "7zTypes.h"
 
 struct _lzma_block_cache {
 
@@ -531,25 +527,85 @@ u32 read_bucket(const _bit_view input, size_t& i, const T... bits) {
 	return result + v - 1;
 }
 
-constexpr u8 ORZ_MAGIC{ 'r' };
+template<u32 LENGTH_BITS, u32 FROM>
+void write_length_bucket(u32 value, bit_stream& output) {
+
+	constexpr u32 ESCAPE{ (1u << LENGTH_BITS) - 1 };
+	constexpr u32 REST_BITS{ (u32)std::bit_width(32u - ESCAPE) };
+
+	static_assert(FROM + ESCAPE <= 33);
+
+	const u32 length{ (u32)std::bit_width(value) };
+	const u32 code{ std::min(length - FROM, ESCAPE) };
+
+	for (u32 k{}; k < LENGTH_BITS; ++k)
+		output.push_back((code >> k) & 1);
+
+	if (code == ESCAPE) {
+
+		const u32 rest{ length < FROM ? length : length - ESCAPE };
+
+		for (u32 k{}; k < REST_BITS; ++k)
+			output.push_back((rest >> k) & 1);
+
+	}
+
+	for (u32 k{}; k + 1 < length; ++k)
+		output.push_back((value >> k) & 1);
+
+}
+
+template<u32 LENGTH_BITS, u32 FROM>
+u32 read_length_bucket(const _bit_view input, size_t& i) {
+
+	constexpr u32 ESCAPE{ (1u << LENGTH_BITS) - 1 };
+	constexpr u32 REST_BITS{ (u32)std::bit_width(32u - ESCAPE) };
+
+	const auto max_size{ input.max_size() };
+
+	u32 code{};
+
+	for (u32 k{}; k < LENGTH_BITS && i < max_size; ++k)
+		code |= u32(input[i++] != 0) << k;
+
+	u32 length{ code + FROM };
+
+	if (code == ESCAPE) {
+
+		u32 rest{};
+
+		for (u32 k{}; k < REST_BITS && i < max_size; ++k)
+			rest |= u32(input[i++] != 0) << k;
+
+		length = std::min(rest < FROM ? rest : rest + ESCAPE, 32u);
+
+	}
+
+	u32 value{ length ? 1u << (length - 1) : 0u };
+
+	for (u32 k{}; k + 1 < length && i < max_size; ++k)
+		value |= u32(input[i++] != 0) << k;
+
+	return value;
+}
+
+constexpr u8 ORZ_MAGIC{ 0xE6 };
+
+// tuned to sessions under around 4.7 hours
+constexpr u32 ORZ_SEED_LENGTH{ 18 };
 
 struct _orz_header {
-	u32 version, flags, frame_count, data_count;
+	u32 version, flags, frame_count;
 	u32 crc; // of the decoded replay
-};
-
-struct _orz_data_block {
-	u32 size;
-	bool is_compressed;
-	u8 props;
-	u32 raw_size;
+	bool seeded;
+	u32 seed; // of the closing -12345 frame
 };
 
 struct _orz_container {
 
 	struct _stream {
 		u8 tag;
-		_orz_data_block block;
+		u32 size;
 		size_t offset;
 	};
 
@@ -567,7 +623,7 @@ inline _orz_container read_container(const std::vector<u8>& file) {
 	if (file.size() < 2 || file[0] != ORZ_MAGIC)
 		return c;
 
-	// the header is at most a few KB (ORZ_MAX_STREAMS streams of ~90 bits)
+	// every header field at its largest still comes to under 300 bits, so 4 KB always holds the header
 	const _bit_view bs{ std::span{ file }.subspan(1, std::min<size_t>(file.size() - 1, 4096)) };
 
 	size_t i{};
@@ -583,45 +639,29 @@ inline _orz_container read_container(const std::vector<u8>& file) {
 		return c;
 	}
 
-	h.flags = read_bucket(bs, i, 12);
+	h.flags = read_bucket(bs, i, ORZ_DECODE_INFO_BITS);
+
+	if (h.flags >> ORZ_DECODE_INFO_BITS)
+		return c;
 
 	for (int k{}; k < 32; ++k)
 		h.crc |= u32(small_read<1>(bs, i)) << k;
 
-	h.frame_count = read_bucket(bs, i, 16);
-	h.data_count = read_bucket(bs, i, 5);
+	h.seeded = small_read<1>(bs, i) != 0;
 
-	if (h.data_count > ORZ_MAX_STREAMS || h.frame_count > ORZ_MAX_FRAMES)
+	if (h.seeded)
+		h.seed = read_length_bucket<3, ORZ_SEED_LENGTH>(bs, i);
+
+	h.frame_count = read_bucket(bs, i, 16);
+
+	if (h.frame_count > ORZ_MAX_FRAMES)
 		return c;
 
-	c.streams.resize(h.data_count);
+	// the streams in their fixed order (_orz_construct::finish)
+	if (h.flags & ORZ_DECODE_INFO::has_osr_header)
+		c.streams.push_back({ (u8)orz_tag::osr_parts, read_bucket(bs, i, 7) });
 
-	for (auto& s : c.streams) {
-
-		const u32 tag{ read_bucket(bs, i, 5) };
-
-		s.block.is_compressed = small_read<1>(bs, i) != 0;
-		s.block.size = read_bucket(bs, i);
-
-		if (s.block.is_compressed) {
-
-			const u32 props{ read_bucket(bs, i, 8) };
-
-			s.block.raw_size = read_bucket(bs, i);
-
-			if (props > 255 || s.block.raw_size > ORZ_MAX_STREAM)
-				return c;
-
-			s.block.props = (u8)props;
-
-		}
-
-		if (tag > 255)
-			return c;
-
-		s.tag = (u8)tag;
-
-	}
+	c.streams.push_back({ (u8)((h.flags & ORZ_DECODE_INFO::replay_verbatim) ? orz_tag::osr_replay_data : orz_tag::frames) });
 
 	c.header_bytes = 1 + (i + 7) / 8;
 
@@ -632,11 +672,15 @@ inline _orz_container read_container(const std::vector<u8>& file) {
 
 	for (auto& s : c.streams) {
 
-		if (s.block.size > file.size() - offset)
+		// the replay runs to the end of the file
+		if (&s == &c.streams.back())
+			s.size = (u32)(file.size() - offset);
+
+		if (s.size > file.size() - offset)
 			return c;
 
 		s.offset = offset;
-		offset += s.block.size;
+		offset += s.size;
 
 	}
 
@@ -653,13 +697,15 @@ struct _osr_frame {
 
 using _osr = std::vector<_osr_frame>;
 
+constexpr float POS_DEFAULT_X{ 256.f }, POS_DEFAULT_Y{ -500.f };
+
 static_assert(sizeof(_osr_frame) == 16, "replay_crc hashes frames as 16 bytes");
 
-inline u32 crc32c(u32 crc, const void* data, size_t size) {
+TARGET_SSE42 inline u32 crc32c(u32 crc, const void* data, size_t size) {
 
 	const u8* p{ (const u8*)data };
 
-#if defined(_M_X64)
+#if defined(_M_X64) || defined(__x86_64__)
 
 	u64 c{ crc };
 
@@ -697,15 +743,15 @@ inline u32 crc32c(u32 crc, const void* data, size_t size) {
 	return c32;
 }
 
+// where the replay CRC starts: not 0, so an all-zero header (a cut file reads as zeros) does not check out
+constexpr u32 ORZ_CRC_SEED{ 0xFFFFFFFF };
+
 FORCEINLINE u32 crc32c_frame(u32 crc, const _osr_frame& f) {
 	return crc32c(crc, &f, sizeof f);
 }
 
 constexpr orz_tag CRC_PART_TAGS[]{
-	orz_tag::osr_header,
-	orz_tag::life_bar,
-	orz_tag::osr_after_life,
-	orz_tag::osr_tail,
+	orz_tag::osr_parts,
 	orz_tag::osr_replay_data
 };
 
@@ -715,88 +761,3 @@ FORCEINLINE u32 crc32c_part(u32 crc, const u8* data, size_t size) {
 
 	return crc32c(crc32c(crc, &n, 4), data, size);
 }
-
-inline bool decompress_osr_string(const u8* data, size_t size, std::string& out) {
-
-	out.clear();
-
-	if (size <= 5 + 8)
-		return false;
-
-	u32 text_size;
-
-	memcpy(&text_size, data + 5, 4);
-
-	if (text_size > ORZ_MAX_STREAM)
-		return false;
-
-	out.resize(text_size);
-
-	SizeT out_size{ text_size }, in_size{ size - (5 + 8) };
-	ELzmaStatus status{};
-
-	LzmaDecode((u8*)out.data(), &out_size, data + 5 + 8, &in_size, data, 5, LZMA_FINISH_END, &status, &lzma_allocFuncs);
-
-	if (out_size != text_size) {
-
-		out.clear();
-
-		return false;
-	}
-
-	return true;
-}
-
-inline std::vector<u8> compress_osr_string(std::string_view string, bool stable) {
-
-	std::vector<u8> output(std::max<size_t>(1024, size_t(string.size() * 1.5) + 64));
-
-	CLzmaEncProps p;
-
-	LzmaEncProps_Init(&p);
-
-	if (stable) {
-
-		p.level = 5;
-		p.dictSize = 1u << 21;
-		p.lc = 3;
-		p.lp = 0;
-		p.pb = 2;
-		p.algo = 1;
-		p.fb = 255;
-		p.btMode = 1;
-		p.numHashBytes = 4;
-		p.mc = 16 + (255 >> 1);
-		p.writeEndMark = 0;
-		p.numThreads = 1;
-
-	} else {
-
-		p.level = 0;
-		p.dictSize = (u32)std::clamp<size_t>(string.size(), 1 << 12, 1 << 24);
-
-	}
-
-	const u64 size{ string.size() };
-
-	memcpy(output.data() + 5, &size, 8);
-
-	size_t len{ output.size() - (5 + 8) };
-	SizeT props_size{ 5 };
-
-	if (LzmaEncode(output.data() + 5 + 8, &len, (const u8*)string.data(), string.size(),
-		&p, output.data(), &props_size, p.writeEndMark,
-		0,
-		&lzma_allocFuncs, &lzma_allocFuncs
-	) != SZ_OK)
-		throw std::runtime_error("LZMA encode failed");
-
-	output.resize(len + 5 + 8);
-
-	return output;
-}
-
-#include "orz_state.h"
-
-#include "device_space.h"
-#include "orz_life.h"
