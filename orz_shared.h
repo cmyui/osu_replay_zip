@@ -51,7 +51,6 @@ constexpr u32 ORZ_VERSION{ 0 };
 // limits for untrusted input, real replays are far below all of them and anything beyond is treated as corrupted
 constexpr size_t ORZ_MAX_FRAMES{ 1u << 22 }; // (~19 hours at 60 fps)
 constexpr size_t ORZ_MAX_STREAM{ 1u << 28 };
-constexpr size_t ORZ_MAX_STREAMS{ 256 };
 
 enum ORZ_FLAG {
 
@@ -579,7 +578,7 @@ constexpr u8 ORZ_MAGIC{ 'r' };
 constexpr u32 ORZ_SEED_LENGTH{ 18 };
 
 struct _orz_header {
-	u32 version, flags, frame_count, data_count;
+	u32 version, flags, frame_count;
 	u32 crc; // of the decoded replay
 	bool seeded;
 	u32 seed; // of the closing -12345 frame
@@ -607,7 +606,7 @@ inline _orz_container read_container(const std::vector<u8>& file) {
 	if (file.size() < 2 || file[0] != ORZ_MAGIC)
 		return c;
 
-	// the header is at most a few KB (ORZ_MAX_STREAMS streams of ~50 bits)
+	// the header is well under 4 KB
 	const _bit_view bs{ std::span{ file }.subspan(1, std::min<size_t>(file.size() - 1, 4096)) };
 
 	size_t i{};
@@ -634,25 +633,23 @@ inline _orz_container read_container(const std::vector<u8>& file) {
 		h.seed = read_length_bucket<3, ORZ_SEED_LENGTH>(bs, i);
 
 	h.frame_count = read_bucket(bs, i, 16);
-	h.data_count = read_bucket(bs, i, 3);
 
-	if (h.data_count > ORZ_MAX_STREAMS || h.frame_count > ORZ_MAX_FRAMES)
+	if (h.frame_count > ORZ_MAX_FRAMES)
 		return c;
 
-	c.streams.resize(h.data_count);
+	// the streams in their fixed order (_orz_construct::finish)
+	if (h.flags & ORZ_FLAG::has_osr_header) {
 
-	for (auto& s : c.streams) {
+		const bool life{ small_read<1>(bs, i) != 0 };
 
-		const u32 tag{ read_bucket(bs, i, 3) };
+		c.streams.push_back({ (u8)orz_tag::osr_parts, read_bucket(bs, i, 7) });
 
-		s.size = read_bucket(bs, i);
-
-		if (tag > 255)
-			return c;
-
-		s.tag = (u8)tag;
+		if (life)
+			c.streams.push_back({ (u8)orz_tag::life_bar, read_bucket(bs, i) });
 
 	}
+
+	c.streams.push_back({ (u8)((h.flags & ORZ_FLAG::replay_verbatim) ? orz_tag::osr_replay_data : orz_tag::frames) });
 
 	c.header_bytes = 1 + (i + 7) / 8;
 
@@ -662,6 +659,10 @@ inline _orz_container read_container(const std::vector<u8>& file) {
 	size_t offset{ c.header_bytes };
 
 	for (auto& s : c.streams) {
+
+		// the replay runs to the end of the file
+		if (&s == &c.streams.back())
+			s.size = (u32)(file.size() - offset);
 
 		if (s.size > file.size() - offset)
 			return c;
