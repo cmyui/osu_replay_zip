@@ -110,7 +110,8 @@ struct _orz_construct {
 
 		if (st.osr_header.size() || st.after_life.size() || st.tail.size()) {
 
-			const auto parts{ osr_parts::encode({ st.osr_header, st.after_life, st.tail }) };
+			const auto parts{ osr_parts::encode({ st.osr_header, st.after_life, st.tail,
+				st.life.present ? life::encode(st.life.text, st.input) : std::vector<u8>{} }) };
 
 			add_stream(orz_tag::osr_parts, parts.data(), parts.size());
 
@@ -118,14 +119,6 @@ struct _orz_construct {
 
 		if (st.replay_data.present)
 			add_stream(orz_tag::osr_replay_data, st.replay_data.bytes.data(), st.replay_data.bytes.size());
-
-		if (st.life.present) {
-
-			const auto bytes{ life::encode(st.life.text, st.input) };
-
-			add_stream(orz_tag::life_bar, bytes.data(), bytes.size());
-
-		}
 
 	}
 
@@ -179,22 +172,14 @@ struct _orz_construct {
 
 		write_bucket(frame_count, h, 16);
 
-		// the streams go in a fixed order, so the flags say which are there: with an .osr its parts and any life bar, then
-		// the replay (verbatim or frames), which runs to the end of the file
-		const auto parts{ stream(orz_tag::osr_parts) }, life{ stream(orz_tag::life_bar) };
+		// the streams go in a fixed order, so the flags say which are there: with an .osr its parts (life bar included),
+		// then the replay (verbatim or frames), which runs to the end of the file
+		const auto parts{ stream(orz_tag::osr_parts) };
 		const auto replay{ stream((flags & ORZ_FLAG::replay_verbatim) ? orz_tag::osr_replay_data : orz_tag::frames) };
 
-		if (flags & ORZ_FLAG::has_osr_header) {
-
-			h.push_back(life.size() != 0);
-
-			// parts in the fields form take 44 to 72 bytes
+		// parts in the fields form take 44 to 72 bytes, and most with a life bar stay under 127
+		if (flags & ORZ_FLAG::has_osr_header)
 			write_bucket((u32)parts.size(), h, 7);
-
-			if (life.size())
-				write_bucket((u32)life.size(), h);
-
-		}
 
 		std::vector<u8> final_file{};
 
@@ -204,7 +189,7 @@ struct _orz_construct {
 
 		add_to_u8(final_file, h.data);
 
-		for (const auto s : { parts, life, replay })
+		for (const auto s : { parts, replay })
 			add_to_u8(final_file, s.data(), s.size());
 
 		if (strlen(output_file))
