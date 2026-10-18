@@ -223,7 +223,7 @@ namespace life {
 					p.time = cursor.prev_time; // the CRC will fail, damaged file
 
 			} else
-				p.time = cursor.prev_time + std::clamp(rc::unzz(m.escape.decode(d, _frame_cursor::cls(k, count))), -(1ll << 40), 1ll << 40);
+				p.time = cursor.prev_time + std::clamp<i64>(rc::unzz(m.escape.decode(d, _frame_cursor::cls(k, count))), -(1ll << 40), 1ll << 40);
 
 			cursor.prev_time = p.time;
 

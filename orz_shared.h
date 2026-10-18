@@ -4,6 +4,7 @@
 #include <array>
 #include <bit>
 #include <charconv>
+#include <cfloat>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
@@ -24,7 +25,13 @@
 #endif
 static_assert(FLT_EVAL_METHOD == 0, "float must not use extended precision (x87)");
 
+#if defined(_MSC_VER)
 #define FORCEINLINE __forceinline
+#define TARGET_SSE42
+#else
+#define FORCEINLINE inline __attribute__((always_inline))
+#define TARGET_SSE42 __attribute__((target("sse4.2"))) // the CRC instructions, without building everything for SSE 4.2
+#endif
 
 typedef uint8_t u8;
 typedef uint16_t u16;
@@ -680,11 +687,11 @@ constexpr float POS_DEFAULT_X{ 256.f }, POS_DEFAULT_Y{ -500.f };
 
 static_assert(sizeof(_osr_frame) == 16, "replay_crc hashes frames as 16 bytes");
 
-inline u32 crc32c(u32 crc, const void* data, size_t size) {
+TARGET_SSE42 inline u32 crc32c(u32 crc, const void* data, size_t size) {
 
 	const u8* p{ (const u8*)data };
 
-#if defined(_M_X64)
+#if defined(_M_X64) || defined(__x86_64__)
 
 	u64 c{ crc };
 
