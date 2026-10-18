@@ -606,7 +606,7 @@ inline _orz_container read_container(const std::vector<u8>& file) {
 	if (file.size() < 2 || file[0] != ORZ_MAGIC)
 		return c;
 
-	// the header is well under 4 KB
+	// every header field at its largest still comes to under 300 bits, so 4 KB always holds the header
 	const _bit_view bs{ std::span{ file }.subspan(1, std::min<size_t>(file.size() - 1, 4096)) };
 
 	size_t i{};
